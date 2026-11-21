@@ -70,6 +70,7 @@ export const INITIAL_FILESYSTEM: FileItem[] = [
   // home/developer
   { id: '9', name: 'developer', path: '/home/developer', type: 'directory', permissions: 'drwxr-xr-x', owner: 'developer', classification: 'PUBLIC', updatedAt: '2026-10-31 09:15', size: '4.0 KB' },
   { id: '10', name: 'projects', path: '/home/developer/projects', type: 'directory', permissions: 'drwxr-xr-x', owner: 'developer', classification: 'PUBLIC', updatedAt: '2026-10-31 09:16', size: '4.0 KB' },
+  { id: 'pictures-dir', name: 'Pictures', path: '/home/developer/Pictures', type: 'directory', permissions: 'drwxr-xr-x', owner: 'developer', classification: 'PUBLIC', updatedAt: '2026-10-31 09:16', size: '4.0 KB' },
   {
     id: '11',
     name: 'morph_kernel.ts',
