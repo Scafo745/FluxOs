@@ -87,7 +87,7 @@ export const Copilot: React.FC = () => {
 
     setTimeout(async () => {
       // 1. Tool Scenario: Catastrophic deletion test
-      if (qLower.includes('delete root') || qLower.includes('wipe') || qLower.includes('rm -rf')) {
+      if (qLower.includes('delete root') || qLower.includes('delete the root') || qLower.includes('wipe') || qLower.includes('rm -rf')) {
         const shellRes = executeShell('rm -rf /');
         const agentMsg: Message = {
           id: `msg-${Date.now()}`,

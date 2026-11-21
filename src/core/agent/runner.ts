@@ -125,10 +125,21 @@ function pump(): void {
 
 // Any task change may have advanced to a running step (approval, auto-low, mode switch).
 let lastTask: AgentTask | null = null;
+
+/** Keeps the Copilot window above windows the agent opened, so prompts are never hidden. */
+function surfaceCopilot(prev: AgentTask | null, next: AgentTask | null): void {
+  if (!next || !['awaiting_approval', 'awaiting_decision', 'done'].includes(next.phase)) return;
+  if (prev && prev.id === next.id && prev.phase === next.phase && prev.current === next.current) return;
+  const copilot = store().windows.find((w) => w.appId === 'copilot');
+  if (copilot) store().focusWindow(copilot.id);
+}
+
 useOSStore.subscribe((s) => {
   if (s.agentTask === lastTask) return;
+  const prev = lastTask;
   lastTask = s.agentTask;
   pump();
+  surfaceCopilot(prev, s.agentTask);
 });
 
 function activeTask(): AgentTask | null {
