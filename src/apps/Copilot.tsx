@@ -3,7 +3,12 @@ import { useOSStore } from '../core/store';
 import { executeShell } from '../kernel/shell';
 import { compilePromptAsync } from '../core/prompt-compiler';
 import { answerQuestionAsync, isOsSynthesisIntent } from '../core/ai-chat';
-import { Bot, User, Send, Sparkles, Terminal, ShieldAlert } from 'lucide-react';
+import { Bot, User, Send, Sparkles, Terminal, ShieldAlert, Square } from 'lucide-react';
+import { isAgentIntent } from '../core/agent/planner';
+import { startAgentTask, stopTask, dismissTask, hasActiveTask } from '../core/agent/runner';
+import { isTerminalPhase } from '../core/agent/machine';
+import type { AgentTask } from '../core/agent/types';
+import { AgentTaskView } from './agent/AgentTaskView';
 
 interface Message {
   id: string;
@@ -15,26 +20,53 @@ interface Message {
     output?: string;
     isError?: boolean;
   };
+  task?: AgentTask;
   timestamp: string;
 }
 
 export const Copilot: React.FC = () => {
-  const { profile, setProfile, cloudConfig, openApp, addToast, pendingCopilotPrompt, setPendingCopilotPrompt } = useOSStore();
+  const { profile, setProfile, cloudConfig, openApp, addToast, pendingCopilotPrompt, setPendingCopilotPrompt, agentMode, setAgentMode, agentTask } = useOSStore();
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
       sender: 'agent',
-      text: `Hello! I am **Morph Copilot**, your autonomous operating system assistant. I can execute commands against the microkernel, recompile the UI/security architecture, and inspect system telemetry.\n\nTry asking me to audit payments, inspect processes, or test our accidental data loss security guards. You can also ask me general questions, like any AI chatbot.`,
+      text: `Hello! I am **Morph Copilot**, your autonomous operating system assistant. I can execute commands against the microkernel, recompile the UI/security architecture, and inspect system telemetry.\n\nTry asking me to audit payments, inspect processes, or test our accidental data loss security guards. You can also ask me general questions, like any AI chatbot.\n\nI can also act on your desktop, for example "open the browser, search weather in Bangalore, then take a screenshot and show it to me". I ask for your approval before every action.`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
   const [input, setInput] = useState('');
   const [isThinking, setIsThinking] = useState(false);
+  const [pendingReplace, setPendingReplace] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const snapshotted = useRef<string | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isThinking]);
+  }, [messages, isThinking, agentTask]);
+
+  // Finished tasks move into the chat history, then the live slot is cleared.
+  useEffect(() => {
+    if (!agentTask || !isTerminalPhase(agentTask.phase)) return;
+    if (snapshotted.current === agentTask.id) return;
+    snapshotted.current = agentTask.id;
+    const done = agentTask;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `msg-task-${done.id}`,
+        sender: 'agent',
+        text: '',
+        task: done,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      },
+    ]);
+    dismissTask();
+  }, [agentTask]);
+
+  const runAgent = useCallback((query: string) => {
+    void startAgentTask(query, cloudConfig);
+    setIsThinking(false);
+  }, [cloudConfig]);
 
   const handleSend = useCallback(async (customPrompt?: string) => {
     const query = (customPrompt || input).trim();
@@ -71,6 +103,17 @@ export const Copilot: React.FC = () => {
         };
         setMessages((prev) => [...prev, agentMsg]);
         setIsThinking(false);
+        return;
+      }
+
+      // 1.5 Agent Mode: real actions, each one approved by the user first.
+      if (isAgentIntent(query)) {
+        if (hasActiveTask()) {
+          setPendingReplace(query);
+          setIsThinking(false);
+          return;
+        }
+        runAgent(query);
         return;
       }
 
@@ -325,7 +368,7 @@ export const Copilot: React.FC = () => {
       );
       setIsThinking(false);
     }, 600);
-  }, [input, profile, cloudConfig, setProfile, openApp, addToast]);
+  }, [input, profile, cloudConfig, setProfile, openApp, addToast, runAgent]);
 
   // Consume a question seeded from Spotlight: answer it here, then clear the
   // channel immediately so it never re-fires.
@@ -370,13 +413,50 @@ export const Copilot: React.FC = () => {
           </div>
         </div>
 
-        <div
-          className="flex items-center space-x-1.5 px-2.5 py-1 rounded-[6px] border font-mono text-[10px]"
-          style={{ borderColor: 'var(--hairline, #ebebeb)', color: '#15803d' }}
-        >
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-          <span>MICROKERNEL LINKED</span>
+        <div className="flex items-center space-x-2">
+          {agentTask && !isTerminalPhase(agentTask.phase) && (
+            <button
+              type="button"
+              onClick={stopTask}
+              aria-label="Stop agent task"
+              className="flex items-center space-x-1 px-2.5 py-1 rounded-[6px] border text-[11px] font-semibold hover:bg-geist-hairlineSoft focus:outline-none focus-visible:ring-2 focus-visible:ring-geist-link/60"
+              style={{ borderColor: 'var(--hairline, #ebebeb)', color: '#ee0000' }}
+            >
+              <Square className="w-3 h-3" aria-hidden />
+              <span>Stop</span>
+            </button>
+          )}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={agentMode === 'auto-low'}
+            aria-pressed={agentMode === 'auto-low'}
+            onClick={() => setAgentMode(agentMode === 'auto-low' ? 'ask-every-time' : 'auto-low')}
+            title="Choose whether the agent asks before every action or only before medium and high risk actions"
+            className="px-2.5 py-1 rounded-[6px] border text-[10px] font-mono hover:bg-geist-hairlineSoft focus:outline-none focus-visible:ring-2 focus-visible:ring-geist-link/60"
+            style={{
+              borderColor: 'var(--hairline, #ebebeb)',
+              color: agentMode === 'auto-low' ? 'var(--link, #0070f3)' : 'var(--text-body, #4d4d4d)',
+            }}
+          >
+            {agentMode === 'auto-low' ? 'Auto-approve low risk (tiers 0-1)' : 'Ask every time'}
+          </button>
+          <div
+            className="flex items-center space-x-1.5 px-2.5 py-1 rounded-[6px] border font-mono text-[10px]"
+            style={{ borderColor: 'var(--hairline, #ebebeb)', color: '#15803d' }}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span>MICROKERNEL LINKED</span>
+          </div>
         </div>
+      </div>
+      <div
+        className="px-4 py-1.5 border-b text-[10px]"
+        style={{ borderColor: 'var(--hairline, #ebebeb)', color: 'var(--text-mute, #8f8f8f)', background: 'var(--canvas-elevated, #ffffff)' }}
+      >
+        {agentMode === 'auto-low'
+          ? 'Agent mode: low-risk steps (tiers 0-1) run on their own. Medium and high risk steps always ask first.'
+          : 'Agent mode: the agent asks before every action. Nothing runs until you approve it.'}
       </div>
 
       {/* Messages Feed */}
@@ -403,7 +483,8 @@ export const Copilot: React.FC = () => {
                   : { background: 'var(--canvas-elevated, #ffffff)', borderColor: 'var(--hairline, #ebebeb)', color: 'var(--text-body, #4d4d4d)', borderTopLeftRadius: 0 }
               }
             >
-              <div className="whitespace-pre-wrap">{m.text}</div>
+              {m.text && <div className="whitespace-pre-wrap">{m.text}</div>}
+              {m.task && <AgentTaskView task={m.task} readOnly />}
 
               {/* Tool Execution Callout */}
               {m.toolCall && (
@@ -457,6 +538,58 @@ export const Copilot: React.FC = () => {
           </div>
         ))}
 
+        {agentTask && !isTerminalPhase(agentTask.phase) && (
+          <div className="flex items-start space-x-3 justify-start">
+            <div
+              className="w-8 h-8 rounded-[12px] border flex items-center justify-center flex-shrink-0 mt-0.5"
+              style={{ borderColor: 'var(--hairline, #ebebeb)', background: 'var(--canvas-elevated, #ffffff)', color: 'var(--accent, #171717)' }}
+            >
+              <Bot className="w-4 h-4" />
+            </div>
+            <div
+              className="max-w-[85%] flex-1 rounded-[12px] p-3.5 border"
+              style={{ background: 'var(--canvas-elevated, #ffffff)', borderColor: 'var(--hairline, #ebebeb)', borderTopLeftRadius: 0 }}
+            >
+              <AgentTaskView task={agentTask} />
+            </div>
+          </div>
+        )}
+
+        {pendingReplace && (
+          <div
+            role="alertdialog"
+            aria-label="Replace the running task"
+            className="rounded-[12px] border p-3 space-y-2 ml-11"
+            style={{ borderColor: 'var(--hairline, #ebebeb)', background: 'var(--canvas-elevated, #ffffff)' }}
+          >
+            <p className="text-xs" style={{ color: 'var(--ink, #171717)' }}>
+              A task is in progress. Cancel it and start this request?
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const q = pendingReplace;
+                  setPendingReplace(null);
+                  runAgent(q);
+                }}
+                className="px-3 py-1.5 rounded-[6px] border text-[11px] font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-geist-link/60"
+                style={{ background: 'var(--accent, #171717)', color: '#ffffff', borderColor: 'var(--accent, #171717)' }}
+              >
+                Cancel it and start
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingReplace(null)}
+                className="px-3 py-1.5 rounded-[6px] border text-[11px] font-semibold hover:bg-geist-hairlineSoft focus:outline-none focus-visible:ring-2 focus-visible:ring-geist-link/60"
+                style={{ borderColor: 'var(--hairline, #ebebeb)', color: 'var(--text-body, #4d4d4d)' }}
+              >
+                Keep current task
+              </button>
+            </div>
+          </div>
+        )}
+
         {isThinking && (
           <div className="flex items-center space-x-2 text-xs font-mono pl-11" style={{ color: 'var(--text-mute, #8f8f8f)' }}>
             <Sparkles className="w-4 h-4 animate-spin" style={{ color: 'var(--accent, #171717)' }} />
@@ -480,6 +613,7 @@ export const Copilot: React.FC = () => {
           'Reconfigure to Windows snap multitasking',
           'Install the axios package',
           'Show background microkernel daemons',
+          'Open the browser, search for weather in Bangalore, and screenshot it',
         ].map((s) => (
           <button
             key={s}
@@ -502,7 +636,7 @@ export const Copilot: React.FC = () => {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-          placeholder="Ask Morph Copilot anything, reconfigure the OS, audit security, or any general question..."
+          placeholder="Ask anything, reconfigure the OS, or tell me what to do (I will ask first)..."
           className="flex-1 px-3.5 py-2 rounded-[6px] border text-xs placeholder-geist-mute focus:outline-none"
           style={{ background: 'var(--canvas, #fafafa)', borderColor: 'var(--hairline, #ebebeb)', color: 'var(--ink, #171717)' }}
         />
