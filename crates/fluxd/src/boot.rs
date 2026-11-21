@@ -82,7 +82,11 @@ pub fn boot(args: &ServeArgs) -> Result<Arc<Engine>> {
     let events = EventBus::new();
     let mut b = Booter { events: &events, stages: Vec::new() };
     let version = env!("CARGO_PKG_VERSION");
-    events.emit("boot.begin", json!({ "version": version, "target": format!("{:?}", args.target).to_lowercase() }));
+    let boot_id = crate::util::random_hex(8)?;
+    events.emit(
+        "boot.begin",
+        json!({ "version": version, "target": format!("{:?}", args.target).to_lowercase(), "boot_id": boot_id }),
+    );
 
     b.stage("core", "FluxOS core", || {
         Ok(((), format!("fluxd {version} · pid {} · {}", std::process::id(), std::env::consts::ARCH), false))
@@ -119,7 +123,12 @@ pub fn boot(args: &ServeArgs) -> Result<Arc<Engine>> {
     let (tokens, signer) = b.stage("secrets", "Credentials and signing key", || {
         let tokens = Tokens::load_or_create(&store.path("secrets"), mode)?;
         let signer = Signer::load_or_create(&store.path("secrets/signing.key"), &store.path("trusted-keys"))?;
-        let detail = format!("{} principals · profile signing key {}", tokens.count(), signer.fingerprint());
+        let detail = format!(
+            "{} principals · {} paired screens · profile signing key {}",
+            tokens.static_count(),
+            tokens.session_count(),
+            signer.fingerprint()
+        );
         Ok(((tokens, signer), detail, false))
     })?;
 
@@ -349,12 +358,21 @@ pub fn boot(args: &ServeArgs) -> Result<Arc<Engine>> {
         target,
         profiles,
         current,
+        boot_id,
+        agent_url: args.agent_url.clone(),
+        allowed_hosts: args
+            .allowed_hosts
+            .iter()
+            .map(|h| h.trim().to_ascii_lowercase())
+            .filter(|h| !h.is_empty())
+            .collect(),
     });
     for d in degraded {
         engine.set_degraded(d);
     }
     *engine.boot.write().expect("boot lock") = BootReport {
         version: version.into(),
+        boot_id: engine.boot_id.clone(),
         started_at,
         ready: false,
         duration_ms: t0.elapsed().as_millis(),
@@ -366,13 +384,16 @@ pub fn boot(args: &ServeArgs) -> Result<Arc<Engine>> {
 }
 
 /// Marks boot complete once the API is listening.
-pub fn mark_ready(engine: &Engine, listen: &str) {
+pub fn mark_ready(engine: &Engine, listen: &str, ui: bool) {
     let t = Instant::now();
     let stage = BootStage {
         id: "api".into(),
         title: "API".into(),
         status: "ok".into(),
-        detail: format!("listening on http://{listen} · SSE /v1/events · MCP /mcp"),
+        detail: format!(
+            "listening on http://{listen} · SSE /v1/events · MCP /mcp{}",
+            if ui { " · web UI /" } else { "" }
+        ),
         duration_ms: t.elapsed().as_millis(),
     };
     engine.events.emit("boot.stage", serde_json::to_value(&stage).unwrap_or_default());
@@ -388,8 +409,16 @@ pub fn mark_ready(engine: &Engine, listen: &str) {
             "generation": report.generation,
             "duration_ms": report.duration_ms,
             "target": report.target,
+            "boot_id": engine.boot_id,
             "degraded": engine.degraded_reasons(),
         }),
+    );
+    // The code goes to the log and secrets/pairing.code, never to the API.
+    tracing::info!(
+        target: "fluxd::pairing",
+        "pair the FluxOS UI with code {} (also in {}/secrets/pairing.code)",
+        engine.tokens.pairing_code(),
+        engine.store.path("").display().to_string().trim_end_matches('/')
     );
     let _ = engine.audit.append(Record {
         kind: "system.boot",

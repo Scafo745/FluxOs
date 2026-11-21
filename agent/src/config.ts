@@ -72,7 +72,8 @@ export const config = {
   fastPathCoverage: Number(env("FLUX_FAST_PATH_COVERAGE", "0.6")),
   maxRepairs: Number(env("FLUX_MAX_REPAIRS", "2")),
   llmTimeoutMs: Number(env("FLUX_LLM_TIMEOUT_MS", "60000")),
-  corsOrigins: (env("FLUX_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000") ?? "")
+  // The web UI: Vite dev server (5173) or served by fluxd (7700).
+  corsOrigins: (env("FLUX_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://127.0.0.1:7700,http://localhost:7700") ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean),

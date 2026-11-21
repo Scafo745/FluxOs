@@ -226,7 +226,7 @@ export class Compiler {
     }
     if (draft.kind === "rollback") {
       try {
-        const plan = await this.fluxd.rollback(draft.rollback_to ?? null, prompt);
+        const plan = await this.fluxd.rollback(draft.rollback_to ?? null, prompt, session.id);
         step("rollback", `${plan.status}: ${plan.change_summary.split("\n")[0]}`);
         return this.finish(base, plan, engine, draft, ctx);
       } catch (e) {

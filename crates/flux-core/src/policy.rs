@@ -275,6 +275,18 @@ fn valid_locale(l: &str) -> bool {
         && enc == "UTF-8"
 }
 
+pub const THEME_NAME_PUNCTUATION: &str = " -_.,!&+()";
+
+/// Theme names end up in CSS and XML comments, SVG titles, INI files and Nix
+/// strings, and tier-0 plans that set them apply automatically. Letters,
+/// digits and a little punctuation only: no `/ * @ ; : < > " ' \ $ { }`.
+pub fn valid_theme_name(name: &str) -> bool {
+    let count = name.chars().count();
+    (1..=48).contains(&count)
+        && name.trim() == name
+        && name.chars().all(|c| c.is_alphanumeric() || THEME_NAME_PUNCTUATION.contains(c))
+}
+
 /// Strict URL check for kiosk mode: https only, no characters that could be
 /// interpreted by systemd, a shell or Nix.
 pub fn valid_kiosk_url(url: &str) -> bool {
@@ -518,11 +530,12 @@ pub fn validate_spec(spec: &SystemSpec, hw: &HardwareInfo) -> Vec<Issue> {
 
     // Design
     let t = &spec.design.tokens;
-    if spec.design.theme_name.trim().is_empty() || spec.design.theme_name.len() > 48 {
-        v.push(Issue::error("invalid_theme_name", "design.theme_name", "theme name must be 1-48 characters"));
-    }
-    if spec.design.theme_name.chars().any(|c| c.is_control() || "\"'\\$`{}".contains(c)) {
-        v.push(Issue::error("invalid_theme_name", "design.theme_name", "theme name contains forbidden characters"));
+    if !valid_theme_name(&spec.design.theme_name) {
+        v.push(Issue::error(
+            "invalid_theme_name",
+            "design.theme_name",
+            format!("theme name must be 1-48 letters, digits, spaces or {THEME_NAME_PUNCTUATION:?}"),
+        ));
     }
     for (name, hex) in t.palette.entries() {
         if !color::is_hex6(hex) {

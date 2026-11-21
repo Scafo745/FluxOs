@@ -80,8 +80,8 @@ export class Fluxd {
   propose(plan: PlanBody, autoApply: boolean) {
     return this.request<PlanRecord>("POST", `/v1/plans${autoApply ? "?auto_apply=true" : ""}`, plan, 50 * 60_000);
   }
-  rollback(to: number | null, prompt: string) {
-    return this.request<PlanRecord>("POST", "/v1/rollback", { to: to ?? undefined, prompt }, 50 * 60_000);
+  rollback(to: number | null, prompt: string, sessionId?: string) {
+    return this.request<PlanRecord>("POST", "/v1/rollback", { to: to ?? undefined, prompt, session_id: sessionId }, 50 * 60_000);
   }
   async generations(): Promise<{ number: number; status: string; summary: string; created_at: string; theme_name: string; parent: number | null }[]> {
     return (await this.request<{ generations: any[] }>("GET", "/v1/generations")).generations;

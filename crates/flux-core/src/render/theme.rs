@@ -8,6 +8,11 @@ use crate::color::{self, Rgb};
 use crate::spec::*;
 use crate::tokens::ColorScheme;
 
+/// Text for a CSS comment: a `*/` would end the comment early.
+fn comment_safe(s: &str) -> String {
+    s.replace("*/", "* /").replace(['\n', '\r'], " ")
+}
+
 fn rgb(hex: &str) -> Rgb {
     Rgb::from_hex(hex).unwrap_or(color::BLACK)
 }
@@ -26,7 +31,7 @@ pub fn css(spec: &SystemSpec, header: &str) -> String {
     let t = &spec.design.tokens;
     let a = &spec.accessibility;
     let mut s = String::new();
-    let _ = writeln!(s, "/* {header} */");
+    let _ = writeln!(s, "/* {} */", comment_safe(header));
     let _ = writeln!(s, ":root {{");
     let _ = writeln!(s, "  color-scheme: {};", if t.scheme == ColorScheme::Dark { "dark" } else { "light" });
     for (name, hex) in t.palette.entries() {
@@ -100,7 +105,7 @@ pub fn gtk_css(spec: &SystemSpec, header: &str) -> String {
         ("error_color", p.danger.clone()),
         ("borders", p.border.clone()),
     ];
-    let mut s = format!("/* {header} */\n");
+    let mut s = format!("/* {} */\n", comment_safe(header));
     for (name, hex) in &pairs {
         let _ = writeln!(s, "@define-color {name} {hex};");
     }
