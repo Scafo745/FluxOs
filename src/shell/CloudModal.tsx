@@ -1,9 +1,33 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useOSStore } from '../core/store';
-import { GEMINI_MODELS, OPENAI_COMPATIBLE_PRESETS, defaultModelForBaseUrl } from '../core/ai-chat';
+import {
+  GEMINI_MODELS,
+  OPENAI_COMPATIBLE_PRESETS,
+  defaultModelForBaseUrl,
+  normalizeApiKey,
+  normalizeBaseUrl,
+} from '../core/ai-chat';
 import type { AiProvider } from '../core/types';
 import { Cloud, CheckCircle2, AlertCircle, X, Zap, Shield, Plus, Trash2, Loader2 } from 'lucide-react';
+
+/** Extract a short gateway message from an error body and detect HTML pages. Never touches the key. */
+function parseGatewayBody(raw: string): { gatewayMessage: string; isWebPage: boolean } {
+  const text = raw.trim();
+  const lower = text.slice(0, 2000).toLowerCase();
+  let msg = '';
+  try {
+    const j = JSON.parse(text);
+    const m = j?.error?.message ?? j?.message ?? (typeof j?.error === 'string' ? j.error : '');
+    if (typeof m === 'string') msg = m;
+  } catch {
+    const isWebPage = lower.includes('<html') || lower.includes('<!doctype') || lower.includes('aliyun');
+    return { gatewayMessage: '', isWebPage };
+  }
+  msg = msg.replace(/\s+/g, ' ').trim();
+  if (msg.length > 200) msg = `${msg.slice(0, 200)}...`;
+  return { gatewayMessage: msg, isWebPage: false };
+}
 
 type ProviderTestStatus = 'idle' | 'testing' | 'valid' | 'invalid' | 'rate-limited' | 'network';
 
@@ -70,8 +94,8 @@ export const CloudModal: React.FC = () => {
   const handleSave = () => {
     const cleaned: AiProvider[] = providers.map((p) => ({
       ...p,
-      apiKey: p.apiKey.trim(),
-      baseUrl: p.baseUrl?.trim() || undefined,
+      apiKey: p.vendor === 'openai-compatible' ? normalizeApiKey(p.apiKey) : p.apiKey.trim(),
+      baseUrl: p.vendor === 'openai-compatible' ? normalizeBaseUrl(p.baseUrl) || undefined : p.baseUrl?.trim() || undefined,
       model: p.model?.trim() || undefined,
       label: p.label?.trim() || undefined,
     }));
@@ -182,14 +206,14 @@ export const CloudModal: React.FC = () => {
   };
 
   const testOpenAiProvider = async (provider: AiProvider) => {
-    const key = provider.apiKey.trim();
+    const key = normalizeApiKey(provider.apiKey);
     if (!key) {
       setProviderTest(provider.id, { status: 'invalid', message: 'Please enter an API key first.' });
       return;
     }
 
-    const baseUrl = (provider.baseUrl?.trim() || OPENAI_COMPATIBLE_PRESETS[0].baseUrl).replace(/\/+$/, '');
-    const model = provider.model?.trim() || defaultModelForBaseUrl(provider.baseUrl);
+    const baseUrl = normalizeBaseUrl(provider.baseUrl) || OPENAI_COMPATIBLE_PRESETS[0].baseUrl;
+    const model = provider.model?.trim() || defaultModelForBaseUrl(baseUrl);
     setProviderTest(provider.id, { status: 'testing', message: '' });
 
     const controller = new AbortController();
@@ -210,35 +234,41 @@ export const CloudModal: React.FC = () => {
         return;
       }
 
-      if (res.status === 401 || res.status === 403) {
+      const raw = await res.text().catch(() => '');
+      const { gatewayMessage, isWebPage } = parseGatewayBody(raw);
+      const status = res.status;
+      const tail = gatewayMessage ? ` Gateway says: ${gatewayMessage}` : '';
+
+      if (isWebPage) {
         setProviderTest(provider.id, {
-          status: 'invalid',
-          message: `HTTP ${res.status}: the API key is invalid or unauthorized for this endpoint.`,
+          status: status >= 500 ? 'network' : 'invalid',
+          message: `HTTP ${status}: the server returned a web page instead of API JSON (bot protection or wrong base URL). Check the base URL from the provider's docs.`,
         });
         return;
       }
 
-      if (res.status === 429) {
-        setProviderTest(provider.id, {
-          status: 'rate-limited',
-          message: 'HTTP 429: rate limited or quota exceeded. Wait a moment and try again.',
-        });
-        return;
+      let state: ProviderTestState;
+      if (status === 400) {
+        state = { status: 'invalid', message: `HTTP 400: the gateway rejected the request. Check the model name against the provider's model list.${tail}` };
+      } else if (status === 401) {
+        state = { status: 'invalid', message: `HTTP 401: the gateway rejected the key. It may be wrong, disabled, or not allowed for this client.${tail}` };
+      } else if (status === 403) {
+        state = { status: 'invalid', message: `HTTP 403: access denied. The key may lack quota or permission for this model.${tail}` };
+      } else if (status === 404) {
+        state = { status: 'invalid', message: `HTTP 404: not found. Check the base URL and that the model name is in the provider's Model list.${tail}` };
+      } else if (status === 429) {
+        state = { status: 'rate-limited', message: `HTTP 429: rate limited or quota exceeded. Wait a moment, or check quota and model permission.${tail}` };
+      } else if (status >= 500) {
+        state = { status: 'network', message: `HTTP ${status}: the endpoint failed or is unreachable right now. Try again later.${tail}` };
+      } else {
+        state = { status: 'invalid', message: `HTTP ${status}: request failed.${tail}` };
       }
-
-      if (res.status >= 500) {
-        setProviderTest(provider.id, {
-          status: 'network',
-          message: `HTTP ${res.status}: the endpoint is unreachable right now. Try again later.`,
-        });
-        return;
-      }
-
-      setProviderTest(provider.id, { status: 'invalid', message: `HTTP ${res.status}: request failed.` });
+      setProviderTest(provider.id, state);
     } catch {
       setProviderTest(provider.id, {
         status: 'network',
-        message: 'Network error or timeout reaching the endpoint. Check the base URL and your connection.',
+        message:
+          'Request failed or timed out. It may be blocked by the network or CORS. Check the base URL and your connection.',
       });
     } finally {
       clearTimeout(timeout);
@@ -462,6 +492,9 @@ export const CloudModal: React.FC = () => {
                               </button>
                             ))}
                           </div>
+                          <p className="text-[10px] text-geist-mute">
+                            Paste the key only (no 'Bearer'). Model name must match the provider's model list exactly.
+                          </p>
                         </>
                       )}
 

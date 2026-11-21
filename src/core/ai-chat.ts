@@ -83,6 +83,34 @@ function trimTrailingSlash(url: string): string {
 }
 
 /**
+ * Clean a pasted API key: trim whitespace/newlines, strip surrounding quotes
+ * and a leading "Bearer " prefix (case-insensitive).
+ */
+export function normalizeApiKey(raw: string | undefined): string {
+  let k = (raw || '').trim();
+  const strip = () => {
+    k = k.replace(/^["'`\u201c\u2018]+|["'`\u201d\u2019]+$/g, '').trim();
+  };
+  strip();
+  k = k.replace(/^bearer\s+/i, '');
+  strip();
+  return k.replace(/\s+/g, '');
+}
+
+/**
+ * Clean a pasted base URL: trim, prepend https:// when no scheme, drop a
+ * trailing /chat/completions and any trailing slashes. Empty input stays empty.
+ */
+export function normalizeBaseUrl(raw: string | undefined): string {
+  let u = (raw || '').trim();
+  if (!u) return '';
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) u = `https://${u}`;
+  u = u.replace(/\/+$/, '');
+  u = u.replace(/\/chat\/completions$/i, '');
+  return u.replace(/\/+$/, '');
+}
+
+/**
  * Pick a sensible default model for a given OpenAI-compatible base URL by
  * matching it against OPENAI_COMPATIBLE_PRESETS. Falls back to a widely
  * available small model when the base URL is unknown.
@@ -315,7 +343,7 @@ export async function callOpenAiCompatible(
   messages: { role: string; content: string }[],
   opts?: { json?: boolean; deadline?: number }
 ): Promise<string | null> {
-  if (!provider.apiKey) {
+  if (!normalizeApiKey(provider.apiKey)) {
     lastGeminiDiagnostic = {
       ok: false,
       status: null,
@@ -326,8 +354,9 @@ export async function callOpenAiCompatible(
     return null;
   }
 
-  const baseUrl = trimTrailingSlash((provider.baseUrl || OPENAI_COMPATIBLE_PRESETS[0].baseUrl).trim());
-  const model = provider.model || defaultModelForBaseUrl(provider.baseUrl);
+  const baseUrl = normalizeBaseUrl(provider.baseUrl) || OPENAI_COMPATIBLE_PRESETS[0].baseUrl;
+  const apiKey = normalizeApiKey(provider.apiKey);
+  const model = provider.model?.trim() || defaultModelForBaseUrl(baseUrl);
 
   const body: Record<string, unknown> = { model, messages };
   if (opts?.json) {
@@ -358,7 +387,7 @@ export async function callOpenAiCompatible(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${provider.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify(body),
         signal: controller.signal,
