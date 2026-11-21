@@ -70,11 +70,15 @@ edge gnome-tiling '[{"tool":"desktop.set_environment","params":{"environment":"g
 stop "$FLUXD_PID"
 
 section "Flake (nixpkgs pinned by flake.lock)"
-for attr in packages.x86_64-linux.fluxd packages.x86_64-linux.flux-agent \
+for attr in packages.x86_64-linux.fluxd packages.x86_64-linux.flux-agent packages.x86_64-linux.flux-ui \
   nixosConfigurations.fluxos-vm.config.system.build.toplevel nixosConfigurations.fluxos-vm.config.system.build.vm; do
   out=$(nixc eval --raw "$FLAKE#$attr.drvPath" 2>"$WORK/flake.err")
   check_match "$attr evaluates" "${out:-$(grep -m1 'error:' "$WORK/flake.err")}" '^/nix/store/.*\.drv$'
 done
 check "fluxos-vm has no NixOS warnings" "$(nixc eval --json "$FLAKE#nixosConfigurations.fluxos-vm.config.warnings" 2>/dev/null | jq length)" 0
+VM="$FLAKE#nixosConfigurations.fluxos-vm.config"
+check_match "fluxos-vm: fluxd serves the UI package" "$(nixc eval --raw "$VM.systemd.services.fluxd.serviceConfig.ExecStart" 2>&1)" '--ui-dir /nix/store/[a-z0-9]+-flux-ui-0\.1\.0( |$)'
+check_match "fluxos-vm: agent accepts the UI origin" "$(nixc eval --raw "$VM.systemd.services.flux-agent.environment.FLUX_CORS_ORIGINS" 2>&1)" '(^|,)http://127\.0\.0\.1:7700(,|$)'
+check "fluxos-vm: UI opens at login" "$(nixc eval --raw "$VM.environment.etc.\"xdg/autostart/fluxos.desktop\".text" 2>/dev/null | grep -c '^Exec=/nix/store/.*-fluxos-open-ui$')" 1
 
 summary

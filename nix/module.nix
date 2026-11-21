@@ -1,9 +1,12 @@
-# NixOS module: runs fluxd (privileged, drives nixos-rebuild) and flux-agent
-# (unprivileged, sandboxed) as systemd services.
+# NixOS module: runs fluxd (privileged, drives nixos-rebuild, serves the web
+# UI) and flux-agent (unprivileged, sandboxed) as systemd services.
 #
 # Usage (non-flake configuration.nix):
 #   imports = [ /path/to/FluxOs/nix/module.nix ./fluxos/generated.nix ];
 #   services.fluxos.enable = true;
+#
+# The UI is at http://127.0.0.1:7700/ ("FluxOS" in the app launcher). Pair a
+# browser with the one-time code from `sudo fluxd pair-code`.
 #
 # fluxd rewrites `${nixosConfigDir}/generated.nix` for every generation and
 # runs nixos-rebuild, so the host configuration must import that file.
@@ -12,6 +15,24 @@
 let
   cfg = config.services.fluxos;
   inherit (lib) mkEnableOption mkIf mkOption optionalString types concatStringsSep;
+
+  # The UI is served by fluxd, so its origin is fluxd's address. The agent
+  # (another port) must accept browser calls from it.
+  listenPort = lib.last (lib.splitString ":" cfg.listen);
+  uiUrl = "http://${cfg.listen}/";
+  uiOrigins = lib.unique [ "http://${cfg.listen}" "http://127.0.0.1:${listenPort}" "http://localhost:${listenPort}" ];
+  corsOrigins = concatStringsSep "," (lib.unique (cfg.corsOrigins ++ lib.optionals cfg.ui.enable uiOrigins));
+
+  desktopItem = pkgs.makeDesktopItem {
+    name = "fluxos";
+    desktopName = "FluxOS";
+    genericName = "AI system designer";
+    comment = "Describe the computer you need";
+    exec = "${pkgs.xdg-utils}/bin/xdg-open ${uiUrl}";
+    icon = "${cfg.ui.package}/fluxos.svg";
+    categories = [ "System" "Settings" ];
+    startupNotify = false;
+  };
 in
 {
   options.services.fluxos = {
@@ -69,7 +90,28 @@ in
     corsOrigins = mkOption {
       type = types.listOf types.str;
       default = [ "http://localhost:5173" "http://127.0.0.1:5173" ];
-      description = "Browser origins allowed to call the APIs (the FluxOS web UI).";
+      description = "Extra browser origins allowed to call the APIs (the Vite dev server by default). The UI that fluxd serves is always allowed.";
+    };
+
+    allowedHosts = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "fluxos.example.net" ];
+      description = "Extra Host header names fluxd accepts. Loopback names always work; everything else is refused to stop DNS rebinding. Needed behind a reverse proxy that keeps the original Host.";
+    };
+
+    ui = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Serve the FluxOS web UI (boot screen, pairing, desktop shell) from fluxd at `http://<listen>/`, with a FluxOS launcher entry.";
+      };
+      package = mkOption {
+        type = types.package;
+        default = pkgs.callPackage ./flux-ui.nix { };
+        defaultText = lib.literalExpression "pkgs.callPackage ./flux-ui.nix { }";
+        description = "Static build of the web UI.";
+      };
     };
 
     agent = {
@@ -107,7 +149,7 @@ in
   };
 
   config = mkIf cfg.enable {
-    environment.systemPackages = [ cfg.package ];
+    environment.systemPackages = [ cfg.package ] ++ lib.optional cfg.ui.enable desktopItem;
 
     systemd.services.fluxd = {
       description = "FluxOS system daemon";
@@ -117,12 +159,15 @@ in
       path = [ config.system.build.nixos-rebuild config.nix.package pkgs.git pkgs.systemd pkgs.iproute2 pkgs.coreutils ];
       environment = {
         RUST_LOG = "info,tower_http=warn";
-        FLUX_CORS_ORIGINS = concatStringsSep "," cfg.corsOrigins;
+        FLUX_CORS_ORIGINS = corsOrigins;
       };
       serviceConfig = {
         ExecStart =
           "${cfg.package}/bin/fluxd serve --state-dir /var/lib/fluxos --listen ${cfg.listen}"
           + " --target ${cfg.target} --mode ${cfg.mode} --nixos-config-dir ${cfg.nixosConfigDir}"
+          + " --agent-url http://127.0.0.1:${toString cfg.agent.port}"
+          + optionalString cfg.ui.enable " --ui-dir ${cfg.ui.package}"
+          + optionalString (cfg.allowedHosts != [ ]) " --allowed-hosts ${concatStringsSep "," cfg.allowedHosts}"
           + optionalString (cfg.flake != null) " --nixos-flake ${cfg.flake}"
           + optionalString cfg.dryRun " --nixos-dry-run"
           + optionalString cfg.dev " --dev";
@@ -153,7 +198,7 @@ in
         FLUX_INTENT_TOKEN_FILE = "%d/intent-token";
         FLUX_AI_PROVIDERS = cfg.agent.providers;
         FLUX_AI_ROUTING = cfg.agent.routing;
-        FLUX_CORS_ORIGINS = concatStringsSep "," cfg.corsOrigins;
+        FLUX_CORS_ORIGINS = corsOrigins;
       };
       serviceConfig = {
         ExecStart = "${cfg.agent.package}/bin/flux-agent";

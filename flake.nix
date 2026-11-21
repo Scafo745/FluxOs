@@ -10,12 +10,14 @@
       fluxPackages = {
         services.fluxos.package = self.packages.${system}.fluxd;
         services.fluxos.agent.package = self.packages.${system}.flux-agent;
+        services.fluxos.ui.package = self.packages.${system}.flux-ui;
       };
     in
     {
       packages.${system} = {
         fluxd = pkgs.callPackage ./nix/fluxd.nix { };
         flux-agent = pkgs.callPackage ./nix/flux-agent.nix { };
+        flux-ui = pkgs.callPackage ./nix/flux-ui.nix { };
         default = self.packages.${system}.fluxd;
       };
 
