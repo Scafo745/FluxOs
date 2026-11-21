@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useOSStore } from '../core/store';
 import {
   GEMINI_MODELS,
+  OPENAI_COMPAT_ATTEMPT_TIMEOUT_MS,
+  isAbortError,
   OPENAI_COMPATIBLE_PRESETS,
   defaultModelForBaseUrl,
   normalizeApiKey,
@@ -195,10 +197,12 @@ export const CloudModal: React.FC = () => {
       }
 
       setProviderTest(provider.id, { status, message });
-    } catch {
+    } catch (e) {
       setProviderTest(provider.id, {
         status: 'network',
-        message: 'Network error or timeout reaching the Gemini API. Check your connection.',
+        message: isAbortError(e)
+          ? 'Timed out after 6s reaching the Gemini API. Check your connection.'
+          : 'Network error reaching the Gemini API. Check your connection.',
       });
     } finally {
       clearTimeout(timeout);
@@ -217,7 +221,8 @@ export const CloudModal: React.FC = () => {
     setProviderTest(provider.id, { status: 'testing', message: '' });
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
+    const timeout = setTimeout(() => controller.abort(), OPENAI_COMPAT_ATTEMPT_TIMEOUT_MS);
+    const startedAt = Date.now();
     try {
       const res = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
@@ -230,7 +235,12 @@ export const CloudModal: React.FC = () => {
       });
 
       if (res.ok) {
-        setProviderTest(provider.id, { status: 'valid', message: `API key is valid. Connected to ${model}.` });
+        const secs = (Date.now() - startedAt) / 1000;
+        const slow = secs > 8 ? ' This model is slow, answers may take a while. A smaller model feels faster.' : '';
+        setProviderTest(provider.id, {
+          status: 'valid',
+          message: `API key is valid. Connected to ${model} (responded in ${secs.toFixed(1)}s).${slow}`,
+        });
         return;
       }
 
@@ -264,7 +274,14 @@ export const CloudModal: React.FC = () => {
         state = { status: 'invalid', message: `HTTP ${status}: request failed.${tail}` };
       }
       setProviderTest(provider.id, state);
-    } catch {
+    } catch (e) {
+      if (isAbortError(e)) {
+        setProviderTest(provider.id, {
+          status: 'network',
+          message: `Timed out after ${Math.round(OPENAI_COMPAT_ATTEMPT_TIMEOUT_MS / 1000)}s. The model may be too slow or the endpoint unreachable.`,
+        });
+        return;
+      }
       setProviderTest(provider.id, {
         status: 'network',
         message:

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, RotateCw, Home, Search, Globe, Shield, Terminal, Folder, Sparkles, ExternalLink, Loader2 } from 'lucide-react';
 import { useOSStore } from '../core/store';
-import { answerQuestionAsync, getLastGeminiDiagnostic, hasUsableProviderForMode } from '../core/ai-chat';
+import { OPENAI_COMPAT_ATTEMPT_TIMEOUT_MS, answerQuestionAsync, getLastAiDiagnostic, hasUsableProviderForMode } from '../core/ai-chat';
 import type { CloudConfig } from '../core/types';
 
 const HOME_URL = 'morphos://start';
@@ -330,15 +330,20 @@ const SearchResults: React.FC<{
         // When we fell back to local with a key configured, surface the real
         // HTTP reason Gemini could not be reached instead of a vague message.
         if (result.source === 'local') {
-          const diag = getLastGeminiDiagnostic();
-          if (diag && !diag.ok && diag.reason !== 'no-key' && diag.status !== null) {
-            setGeminiNote(
-              `Gemini could not be reached (${diag.reason}). Check the key in Cloud Gateway settings.`
-            );
-          } else if (diag && !diag.ok && diag.reason === 'network error/timeout') {
-            setGeminiNote(
-              'Gemini could not be reached (network error or timeout). Check your connection and the key in Cloud Gateway settings.'
-            );
+          const diag = getLastAiDiagnostic();
+          if (diag && !diag.ok && diag.reason !== 'no-key' && diag.reason !== 'empty response') {
+            const who = diag.vendor === 'gemini' ? 'Gemini' : diag.vendor === 'openai-compatible' ? 'The AI provider (OpenAI-compatible)' : 'The AI provider';
+            if (diag.reason === 'timeout') {
+              setGeminiNote(
+                diag.vendor === 'openai-compatible'
+                  ? `${who} timed out after ${Math.round(OPENAI_COMPAT_ATTEMPT_TIMEOUT_MS / 1000)}s. Try again or pick a faster model.`
+                  : `${who} timed out. Try again in a moment.`
+              );
+            } else if (diag.status !== null) {
+              setGeminiNote(`${who} returned HTTP ${diag.status} (${diag.reason.replace(/^http-\d+\s*/, '') || 'request failed'}). Check the key in Cloud Gateway settings.`);
+            } else {
+              setGeminiNote(`${who} could not be reached (network error). Check your connection and the settings in Cloud Gateway.`);
+            }
           }
         }
         setLoading(false);
