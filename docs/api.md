@@ -1,22 +1,25 @@
 # FluxOS API reference
 
-Two local services. Both bind to `127.0.0.1` by default and allow CORS from the origins in `FLUX_CORS_ORIGINS` (defaults include `http://localhost:5173` for a Vite dev server).
+Two local services. Both bind to `127.0.0.1` by default and allow CORS from the origins in `FLUX_CORS_ORIGINS` (defaults include `http://localhost:5173` for a Vite dev server; the agent also allows `http://127.0.0.1:7700` and `http://localhost:7700`, where fluxd serves the UI).
 
-- **fluxd** `http://127.0.0.1:7700`: system state, plans, approvals, generations, audit, events.
+- **fluxd** `http://127.0.0.1:7700`: system state, plans, approvals, generations, audit, events, pairing, and the web UI itself (see [Serving the web UI](#serving-the-web-ui)).
 - **flux-agent** `http://127.0.0.1:7701`: natural-language intents.
 
-Errors from both have the shape `{"error": {"code": "...", "message": "...", "details": ...}}`.
+Errors from both have the shape `{"error": {"code": "...", "message": "...", "details": ...}}`. Unknown `/v1/...` paths on fluxd return a JSON 404 (`not_found`), also when it serves the UI.
 
 ## Authentication
 
-| Token file (`<state>/secrets/`) | Use it for |
+| Credential | Use it for |
 |---|---|
-| `admin.token` | the web UI acting for the device owner: approvals, rollback, profiles, reboot |
-| `agent.token` | flux-agent only |
-| `intent.token` | clients calling flux-agent `/v1/intents` |
-| `user.token` | fleet mode only: a non-admin person |
+| paired session `flxs_…` | a browser screen. Returned by `POST /v1/pair`; acts as the device owner (personal mode) or as a local user (fleet mode); revocable. fluxd stores only its SHA-256 in `secrets/sessions.json` |
+| `secrets/admin.token` | the device owner's CLI and automation (`scripts/flux`): approvals, rollback, profiles, reboot |
+| `secrets/agent.token` | flux-agent only |
+| `secrets/intent.token` | clients calling flux-agent `/v1/intents`; paired screens receive it in the pairing response |
+| `secrets/user.token` | fleet mode only: a non-admin person |
 
-Send `Authorization: Bearer <token>`. `EventSource` cannot set headers, so `GET /v1/events?access_token=<token>` is accepted too.
+Send `Authorization: Bearer <token>`. `EventSource` cannot set headers, so `GET /v1/events?access_token=<token>` is accepted too; the web UI streams events with `fetch` and the header instead, which keeps tokens out of URLs and logs.
+
+Principal ids name who acted, in plans and the audit log: `owner` and `local-user` for the static tokens, `owner@se_…` or `local-user@se_…` for a paired screen, `flux-agent` for the agent.
 
 ## fluxd
 
@@ -24,33 +27,78 @@ Send `Authorization: Bearer <token>`. `EventSource` cannot set headers, so `GET 
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/v1/health` | `{status: ok|degraded, version, generation, target, mode, uptime_s, degraded[], ready}` |
-| GET | `/v1/boot` | boot report: `{version, started_at, ready, duration_ms, target, generation, stages[{id, title, status: ok|warn|fail, detail, duration_ms}]}` |
+| GET | `/v1/health` | `{status: ok|degraded, version, boot_id, generation, target, mode, uptime_s, degraded[], ready, event_seq}` |
+| GET | `/v1/boot` | boot report: `{version, boot_id, started_at, ready, duration_ms, target, generation, stages[{id, title, status: ok|warn|fail, detail, duration_ms}]}` |
+| GET | `/v1/ui-config` | `{version, boot_id, mode, agent_url, pairing: "code"}` for a UI that is not paired yet |
+| POST | `/v1/pair` | exchanges a one-time code for a session token, see [Pairing](#pairing) |
 | GET | `/v1/theme.css` | current theme as CSS custom properties (`--flux-color-accent`, `--flux-font-sans`, `--flux-radius-md`, `--flux-duration-base`, `--flux-easing`, ...) |
 | GET | `/v1/tokens.json` | current DTCG tokens (`application/design-tokens+json`) |
 | GET | `/v1/wallpaper.svg` | current generated wallpaper |
 
+`boot_id` changes every time fluxd starts. Rendered artifacts (`theme.css`, `tokens.json`, `wallpaper.svg`, and the `file` endpoints of plans and generations) are sent with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:`, so opening one directly cannot run scripts.
+
+### Pairing
+
+fluxd only takes orders from screens a person paired. At every start it creates an 8-character code (Crockford base32, shown as `K7QM-3XRA`), prints it to its log (`fluxd::pairing`) and writes it to `<state>/secrets/pairing.code`. No API endpoint returns it, so a web page cannot pair itself. `fluxd pair-code` prints it (`sudo fluxd pair-code` on NixOS; `scripts/flux pair` in development).
+
+```http
+POST /v1/pair
+{"code": "k7qm3xra", "name": "Firefox on Linux"}
+```
+
+Case, dashes, spaces and the look-alikes O/0 and I/L/1 are forgiven. The response:
+
+```json
+{
+  "token": "flxs_…",
+  "session": { "id": "se_…", "name": "Firefox on Linux", "role": "admin", "created_at": "…" },
+  "principal": { "id": "owner@se_…", "role": "admin", "session": "se_…" },
+  "mode": "personal",
+  "intent_token": "…",
+  "agent_url": "http://127.0.0.1:7701"
+}
+```
+
+A code works once; after a successful pairing fluxd writes the next one. A wrong code returns 403 `wrong_code` with `details.attempts_left`. The fifth wrong try rotates the code and pauses pairing for 30 seconds: 429 `pairing_locked` with `details.retry_after_s`. Successful pairings and lockouts are audited (`session.paired`, `pairing.locked`).
+
+### Sessions
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/v1/logout` | revokes the caller's own session (static tokens get 400) |
+| GET | `/v1/sessions` | admin only: `{current, sessions[{id, name, role, created_at}]}` |
+| POST | `/v1/sessions/{id}/revoke` | your own session, or any session as an admin |
+
+A revoked token stops working at once; the UI that held it returns to the pairing screen when it sees the `session.revoked` event or a 401.
+
 ### Events (SSE)
 
-`GET /v1/events` replays up to 512 buffered events, then streams live ones. Each SSE message has `id` = sequence number, `event` = kind, `data` = `{seq, ts, kind, data}`. Reconnects send `Last-Event-ID` (or `?since=<seq>`) to resume.
+`GET /v1/events` replays up to 512 buffered events, then streams live ones. Each SSE message has `id` = sequence number, `event` = kind, `data` = `{seq, ts, kind, data}`. Reconnects send `Last-Event-ID` (or `?since=<seq>`) to resume. To get only new events, read `event_seq` from `/v1/health` and subscribe with `?since=<event_seq>`.
+
+Sequence numbers restart when fluxd restarts. A cursor beyond the newest event therefore comes from an earlier daemon instance, and fluxd replays the new instance's buffer from its first event, which is `boot.begin` with the new `boot_id`. Compare it with the `boot_id` you saw before to detect a restart.
 
 | Kind | Data |
 |---|---|
-| `boot.begin`, `boot.stage`, `boot.ready` | boot progress (`boot.stage` data is a stage object; `reboot: true` during a simulated reboot) |
-| `plan.proposed`, `plan.blocked`, `plan.invalid`, `plan.noop` | `{plan_id, tier, decision, summary, status}` |
+| `boot.begin` | `{version, target, boot_id}`; `{…, reboot: true}` when a simulated reboot starts |
+| `boot.stage` | a stage object; during a simulated reboot the stages are `firmware`, `bootloader`, `kernel`, `scheduler`, `session` and a real `health` run, each with `reboot: true` |
+| `boot.ready` | `{generation, duration_ms, target, boot_id, degraded[]}`; `reboot: true` after a simulated reboot |
+| `plan.proposed`, `plan.blocked`, `plan.invalid`, `plan.noop` | `{plan_id, tier, decision, summary, status, prompt, source, session_id}` |
 | `plan.approved`, `plan.rejected` | `{plan_id, by?}` |
-| `apply.started` | `{plan_id, generation, previous, tier}` |
+| `apply.started` | `{plan_id, generation, previous, tier, origin}` |
 | `apply.step` | `{plan_id, generation, step}` |
 | `apply.health` | `{plan_id, generation, check: {id, name, status, detail}}` |
-| `apply.rolled_back`, `apply.failed` | `{plan_id, generation, restored, failed[] | error}` |
-| `generation.switched` | `{generation, previous, plan_id, staged, theme, summary}` |
+| `apply.rolled_back`, `apply.failed` | `{plan_id, generation, restored, failed[] | error, origin}` |
+| `generation.switched` | `{generation, previous, plan_id, staged, theme, summary, origin}` |
 | `system.reboot` | `{generation, message, staged_activated}` |
+| `session.paired`, `session.revoked` | `{session: {id, name, role, created_at}}` |
+
+`origin` is `{source, session_id}` from the plan's intent. The web UI uses one id per browser tab, both as `intent.session_id` on its own plans and as the agent `session_id`; the agent copies its session id into the plans it proposes. So a UI can tell its own changes from changes made elsewhere and notify only about the latter.
 
 ### State
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/v1/whoami` | `{id, role, mode, can_approve_tiers[]}` |
+| GET | `/v1/whoami` | `{id, role, session, mode, can_approve_tiers[]}`; `session` is null for static tokens |
 | GET | `/v1/system` | `{generation, status, theme_name, spec_digest, spec, target, mode, hardware, degraded, pending_approvals, audit_head}` |
 | GET | `/v1/hardware` | probe result (or `<state>/hardware.json` override) |
 | GET | `/v1/tools` | registry with tier, behavior, scope, `params_schema` (JSON Schema) |
@@ -112,7 +160,7 @@ Status codes worth handling: 401 bad token, 403 role not allowed, 409 stale or e
 | GET | `/v1/generations` | `{current, generations[{number, parent, status, summary, tier, theme_name, requires_reboot, artifacts}]}` |
 | GET | `/v1/generations/{n}` | `{meta, spec}` |
 | GET | `/v1/generations/{n}/file?path=…` | a rendered artifact of that generation |
-| POST | `/v1/rollback` | body `{to?, prompt?}`; default is the parent of the current generation. Applied right away when the caller may approve the resulting tier |
+| POST | `/v1/rollback` | body `{to?, prompt?, session_id?}`; default is the parent of the current generation. Applied right away when the caller may approve the resulting tier. To show the risk first, send a `generation.restore` operation to `/v1/plans/validate`: the response has the diff and the tier |
 | POST | `/v1/system/reboot` | admin only. Sandbox: simulated reboot that activates a staged generation and replays boot stages. NixOS: `systemctl reboot` |
 
 ### Profiles
@@ -131,6 +179,20 @@ Status codes worth handling: 401 bad token, 403 role not allowed, 409 stale or e
 |---|---|---|
 | GET | `/v1/audit?limit=50&before=<seq>&kind=apply.` | newest first, plus the chain head |
 | GET | `/v1/audit/verify` | `{ok, entries, head, broken_at?, error?}` |
+
+### Serving the web UI
+
+`fluxd serve --ui-dir ui/dist` serves the built UI at `/` on the API's origin; paths that are not files fall back to `index.html`. In development, `scripts/dev.sh` runs the Vite dev server instead, which proxies `/v1` to fluxd.
+
+| Flag (environment) | Default | Meaning |
+|---|---|---|
+| `--ui-dir` (`FLUX_UI_DIR`) | none | directory with the built UI; fluxd refuses to start if it has no `index.html` |
+| `--agent-url` (`FLUX_AGENT_PUBLIC_URL`) | `http://127.0.0.1:7701` | flux-agent as the browser reaches it; returned by `/v1/ui-config` and `/v1/pair`, and allowed in the CSP |
+| `--allowed-hosts` (`FLUX_ALLOWED_HOSTS`) | none | extra Host header names to accept, comma separated |
+
+UI responses carry `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' <agent origin>; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, plus `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`.
+
+Every request, API or UI, passes a Host check first. `127.0.0.1`, `::1`, `localhost` and `*.localhost` are accepted, with any port, plus the names in `--allowed-hosts`. Anything else gets 421 `host_not_allowed`. fluxd listens on loopback, but a browser tricked by DNS rebinding would send the attacker's hostname; this check stops such pages from reaching the API.
 
 ### MCP
 

@@ -1,6 +1,6 @@
-# FluxOS backend architecture
+# FluxOS architecture
 
-This document explains how a plain-language request becomes a running system, and where each safety guarantee from the PRD is enforced.
+This document explains how a plain-language request becomes a running system, where each safety guarantee from the PRD is enforced, and how the web UI fits in.
 
 ## 1. Components and trust
 
@@ -9,7 +9,8 @@ This document explains how a plain-language request becomes a running system, an
 | `fluxd` | root on a real machine | validation, approvals, applying, audit | nothing it receives |
 | `flux-agent` | unprivileged, systemd `DynamicUser`, sandboxed | interpreting intent, drafting plans | any decision about risk |
 | LLM providers | external or local | proposing operations | everything |
-| web UI / CLI / MCP clients | holds a human or agent token | presenting plans to people | bypassing policy |
+| web UI (a paired browser) | a revocable session token for one person | presenting plans to people, collecting their decisions | bypassing policy |
+| CLI / MCP clients | a static human or agent token | scripting and automation | bypassing policy |
 
 The agent authenticates to fluxd with the `agent` role. It can read state, propose plans and apply tier 0-1 plans. It cannot approve, cannot apply tier 2+, and never sees a human token: the UI sends approvals straight to fluxd. A compromised or prompt-injected agent can therefore, at worst, propose a plan that a person then sees and rejects.
 
@@ -20,6 +21,10 @@ Roles in fluxd (`crates/fluxd/src/auth.rs`):
 - `agent`: the orchestrator. Approves nothing.
 
 Tokens are generated at first boot into `<state>/secrets/` with mode 0600 and compared in constant time. `intent.token` is what UI clients present to the agent; it carries no fluxd authority.
+
+Browsers do not read token files. A person pairs a screen by entering a one-time code that fluxd prints to its log and keeps in `secrets/pairing.code`. No API returns the code, so a web page cannot pair itself. The screen receives a session token (`flxs_…`) bound to that person's role: the owner in personal mode, a local user in fleet mode, so administrators keep their own credentials. fluxd stores only the token's SHA-256, lists sessions to administrators, and revokes them on request. Codes work once; five wrong tries rotate the code and pause pairing for 30 seconds.
+
+fluxd listens on loopback, which does not stop a malicious web page on the same machine from trying: through DNS rebinding the browser would talk to 127.0.0.1 under the attacker's hostname. A Host-header check in front of every route accepts only loopback names (and `--allowed-hosts`) and answers 421 otherwise.
 
 ## 2. The system spec
 
@@ -124,14 +129,31 @@ Palettes come from `tokens::generate_palette`: one accent (plus optional seconda
 
 Providers (`agent/src/providers/`) share one interface. The router tries them in order, trips a per-provider circuit after three failures in two minutes, and records each attempt in the trace. Successful LLM plans are cached by prompt, answers and spec digest.
 
-## 8. Audit log
+## 8. The web UI
+
+`ui/` is a React 19 and TypeScript single-page app (Vite, Tailwind 4, Zustand). In production fluxd serves it on its own origin (`--ui-dir`), so the API is same-origin and the Content-Security-Policy can be strict: scripts only from fluxd, network access only to fluxd and the agent's origin, no frames, no plugins. The agent is a second origin and allows the UI through CORS. Fonts are self-hosted (Fontsource, OFL), so the UI makes no third-party requests.
+
+**Boot.** Before pairing, the UI uses only public endpoints. It loads the live `theme.css` and wallpaper so the first screen already matches the system. Then it replays `/v1/boot`: the real stages, details and measured durations, paced for reading (`Space` skips, `Esc` shows details). Then it shows the pairing screen or the desktop. A simulated reboot on the sandbox target streams its own stages (firmware, bootloader, kernel, scheduler, session, health) into the same view.
+
+**State.** `state/system.ts` holds the system view, plans, generations and events. One event stream keeps it current. The stream is `fetch` with the session token in the `Authorization` header, starting at `since=event_seq` from `/v1/health`. Plan events refresh the plan list, `generation.switched` reloads the system and theme, and a `boot.begin` with a new `boot_id` means fluxd restarted. Events carry `origin.session_id`, so the UI notifies a person only about changes started elsewhere (another screen, the CLI, MCP).
+
+**The desktop follows the spec.** `theme.css` provides every design token as a CSS custom property, and the shell lays itself out from `spec.desktop`: dock position, size, auto-hide and floating; panel position and height, global menu, taskbar when there is no dock; tiling with the spec's gaps, snapping, and workspaces. A plan or generation preview swaps in the candidate spec, theme and wallpaper from fluxd's preview endpoints without applying anything.
+
+**Decisions stay in fluxd.** The UI shows fluxd's change list (from the real diff), not the model's text, which is labeled as context only. Approving sends the `plan_hash` the person saw. Restoring a generation first dry-runs `generation.restore` through `/v1/plans/validate`; when going back is tier 2 or higher, a dialog shows the exact changes before anything happens. Buttons follow the live plan record, so a plan approved on one screen is shown as decided everywhere.
+
+**Untrusted text.** Everything from fluxd and the agent is rendered as text, never as HTML. The live `theme.css` is applied as a stylesheet, and the wallpaper is shown as an image, where SVG cannot run scripts; the CSP blocks remote stylesheets, fonts and images, and rendered artifacts are served with a `sandbox` CSP. Free-text fields that reach CSS or SVG are validated too: theme names allow letters, digits and simple punctuation only. Without that rule, a tier 0 plan, which applies without asking, could have put an `@import` into `theme.css` or a script into `wallpaper.svg`.
+
+## 9. Audit log
 
 `crates/fluxd/src/audit.rs`: JSON lines, each entry holding the SHA-256 of the previous one (genesis is 64 zeros). Entries record prompt, operations, decision, plan hash, approver, generation and result. Verification runs at every boot and on `/v1/audit/verify`; editing any line breaks the chain from that entry on. Every append is also emitted on the `fluxd::audit` tracing target for journald, syslog and SIEM collection. There is no API that deletes entries.
 
-## 9. Mapping to the PRD
+## 10. Mapping to the PRD
 
 | PRD item | Where |
 |---|---|
+| Preview before applying | `GET /v1/plans/{id}/preview`, `ui/src/state/system.ts` (`previewPlan`) |
+| UI and shell (themes, animations, dock, panels, snapping, tiling) | renderers for the real desktop; `ui/src/desktop/` for the web shell |
+| UI as demo and admin console (React, TypeScript, Vite, Tailwind, Zustand) | `ui/` |
 | Declarative over imperative, whitelisted actions | `spec.rs`, `registry.rs`, `ops.rs` |
 | Permission tiers and proposals in fleets | `policy.rs` (`decide`), `auth.rs` |
 | Explain every change | `diff.rs` summaries, plan records, audit |
