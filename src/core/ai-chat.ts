@@ -56,7 +56,20 @@ export function isRetryableGeminiStatus(status: number): boolean {
  * AbortController; this ceiling guarantees the UI never hangs even when
  * several providers are configured and all are slow or unreachable.
  */
-export const AI_TOTAL_DEADLINE_MS = 18000;
+export const AI_TOTAL_DEADLINE_MS = 40000;
+
+/**
+ * Per-attempt timeout for OpenAI-compatible gateways (milliseconds). Gateway
+ * models (often reasoning-style) can take well over the 4s Gemini cap to
+ * answer a real request, so they get their own, longer budget. The Cloud
+ * Gateway Test button uses the same value so Test and real requests agree.
+ */
+export const OPENAI_COMPAT_ATTEMPT_TIMEOUT_MS = 25000;
+
+/** True when a thrown fetch error is an AbortController timeout. */
+export function isAbortError(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && (e as { name?: string }).name === 'AbortError';
+}
 
 /**
  * How long a provider stays "cooling down" after it reports a rate-limit /
@@ -174,7 +187,7 @@ let lastGeminiDiagnostic: AiDiagnostic | null = null;
  * Read why the most recent AI call succeeded or failed. Returns null when no
  * call has been attempted yet this session. Reason strings are stable and
  * UI-friendly: 'no-key', 'http-400 invalid or revoked key', 'http-429 rate
- * limited', 'http-403 forbidden', 'network error/timeout', 'ok', etc.
+ * limited', 'http-403 forbidden', 'timeout', 'network error', 'ok', etc.
  *
  * The RETURN SHAPE is intentionally unchanged ({ ok, status, reason }) for
  * backward compatibility with existing consumers, even though internally the
@@ -184,6 +197,14 @@ export function getLastGeminiDiagnostic(): GeminiDiagnostic | null {
   if (!lastGeminiDiagnostic) return null;
   const { ok, status, reason } = lastGeminiDiagnostic;
   return { ok, status, reason };
+}
+
+/**
+ * Like getLastGeminiDiagnostic() but also reports which provider failed
+ * (vendor and label) so the UI can word its message accurately.
+ */
+export function getLastAiDiagnostic(): AiDiagnostic | null {
+  return lastGeminiDiagnostic ? { ...lastGeminiDiagnostic } : null;
 }
 
 /** Human-readable reason for a non-OK HTTP status from the Gemini endpoint. */
@@ -236,7 +257,7 @@ export async function callGeminiCandidates(
   // Track the most recent failure across all attempts so, if every candidate
   // is exhausted, the exported diagnostic reflects the real last reason.
   let lastStatus: number | null = null;
-  let lastReason = 'network error/timeout';
+  let lastReason = 'network error';
 
   for (const model of GEMINI_MODELS) {
     // At most 2 attempts per model (initial + one quick retry on 503/429).
@@ -298,10 +319,10 @@ export async function callGeminiCandidates(
 
         // Hard status, or retry already spent: move on to the next candidate.
         break;
-      } catch {
+      } catch (e) {
         // Network error / abort / timeout: move on to the next candidate.
         lastStatus = null;
-        lastReason = 'network error/timeout';
+        lastReason = isAbortError(e) ? 'timeout' : 'network error';
         break;
       }
     }
@@ -335,7 +356,7 @@ function reasonForOpenAiStatus(status: number): string {
  *  - other non-ok -> hard error, return null.
  *  - network / abort / timeout -> return null.
  *
- * Each call owns its own AbortController wired to GEMINI_ATTEMPT_TIMEOUT_MS.
+ * Each call owns its own AbortController wired to OPENAI_COMPAT_ATTEMPT_TIMEOUT_MS.
  * The apiKey is never logged.
  */
 export async function callOpenAiCompatible(
@@ -365,12 +386,12 @@ export async function callOpenAiCompatible(
 
   // Clamp this call to the remaining overall budget when a deadline is threaded
   // in, so a slow provider cannot outlast the multi-provider run's ceiling.
-  const remaining = opts?.deadline !== undefined ? opts.deadline - Date.now() : GEMINI_ATTEMPT_TIMEOUT_MS;
+  const remaining = opts?.deadline !== undefined ? opts.deadline - Date.now() : OPENAI_COMPAT_ATTEMPT_TIMEOUT_MS;
   if (remaining <= 0) {
     lastGeminiDiagnostic = {
       ok: false,
       status: null,
-      reason: 'network error/timeout',
+      reason: 'timeout',
       vendor: 'openai-compatible',
       label: provider.label,
     };
@@ -379,7 +400,7 @@ export async function callOpenAiCompatible(
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), Math.min(GEMINI_ATTEMPT_TIMEOUT_MS, remaining));
+    const timeoutId = setTimeout(() => controller.abort(), Math.min(OPENAI_COMPAT_ATTEMPT_TIMEOUT_MS, remaining));
 
     let res: Response;
     try {
@@ -431,12 +452,12 @@ export async function callOpenAiCompatible(
       label: provider.label,
     };
     return null;
-  } catch {
-    // Network error / abort / timeout.
+  } catch (e) {
+    // Abort means our timeout fired; anything else is a network/CORS failure.
     lastGeminiDiagnostic = {
       ok: false,
       status: null,
-      reason: 'network error/timeout',
+      reason: isAbortError(e) ? 'timeout' : 'network error',
       vendor: 'openai-compatible',
       label: provider.label,
     };
@@ -513,7 +534,11 @@ export async function runProvidersForText(
 
     let text: string | null = null;
     if (provider.vendor === 'gemini') {
-      text = await callGeminiCandidates(provider.apiKey, build.geminiBody, { deadline });
+      text = await callGeminiCandidates(provider.apiKey, build.geminiBody, {
+        // Gemini keeps its own fail-fast budget even though the overall run
+        // budget is larger (it exists for slow OpenAI-compatible gateways).
+        deadline: Math.min(deadline, Date.now() + GEMINI_TOTAL_DEADLINE_MS),
+      });
     } else if (provider.vendor === 'openai-compatible') {
       text = await callOpenAiCompatible(provider, build.openAiMessages, { json: build.json, deadline });
     }
