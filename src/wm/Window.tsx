@@ -114,6 +114,8 @@ export const Window: React.FC<WindowProps> = ({ window: win, onSnapZoneChange })
       {/* ── Inner container capturing pointer down to guarantee instant focus ── */}
       <div
         className="w-full h-full flex flex-col overflow-hidden"
+        data-window-id={win.id}
+        data-window-app={win.appId}
         onPointerDownCapture={() => focusWindow(win.id)}
       >
         {/* ── Title bar ──────────────────────────────── */}

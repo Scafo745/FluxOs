@@ -9,6 +9,31 @@
 [![TailwindCSS](https://img.shields.io/badge/TailwindCSS-3.4-38B2AC?logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
 [![Zustand](https://img.shields.io/badge/State-Zustand-orange)](https://github.com/pmndrs/zustand)
 
+### 🤖 Agent Mode
+
+Ask the Copilot to do something multi-step, for example "open the browser, search for MorphOS, take a screenshot and show it to me". The Copilot plans the steps, shows each one as an approval card, and runs it only after you allow it.
+
+**Approval modes** (switch in the Copilot header):
+
+- **Ask every time** (default): every step waits for your approval. You can approve, skip or stop the task.
+- **Auto-approve low risk**: tier 0 and 1 steps run on their own. Anything riskier still asks.
+
+**Tool tiers**
+
+| Tier | Meaning | Examples |
+| --- | --- | --- |
+| 0 | Safe, no side effects | `show_image`, `set_theme` |
+| 1 | Low risk, reversible | `open_app`, `close_app`, `focus_window`, `screenshot`, `read_file` |
+| 2 | Changes state or navigates | `browser_search`, `browser_navigate`, `install_package`, `run_shell` for ordinary commands |
+| 3 | High risk, always asks | `run_shell` with `rm`, `mv`, `chmod`, `kill`, `mkdir` or redirects, security-related theme changes |
+| 4 | Blocked, never runs | destructive commands such as `rm -rf /`, sudo |
+
+Arguments are validated before approval and again right before execution. Every plan, approval, denial, block and result is written to the Security Guard audit log.
+
+**Planner**: an offline rule-based planner works with no configuration. If a cloud provider is configured, it is asked for a plan first, and the result goes through the same validation and tiering.
+
+**Screenshots**: the `screenshot` tool captures the real MorphOS desktop UI as a PNG, shows it in the chat, and saves it to `~/Pictures`. Cross-origin iframes (such as external sites in the in-OS browser) cannot be captured by the browser and appear blank or are omitted.
+
 ---
 
 ## 💡 What is MorphOS?

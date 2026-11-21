@@ -3,6 +3,22 @@ import { OSProfile, WindowState, AppId, FileItem, AuditLog, SnapZone, ProcessInf
 import { OS_PRESETS } from './presets';
 import { INITIAL_FILESYSTEM } from '../kernel/filesystem';
 import { INITIAL_PROCESSES } from '../kernel/process';
+import { reduceTask } from './agent/machine';
+import type { AgentAction, AgentMode, AgentTask } from './agent/types';
+
+export interface BrowserCommand {
+  id: number;
+  type: 'navigate' | 'search';
+  value: string;
+}
+
+export interface BrowserStatus {
+  state: 'idle' | 'loading' | 'ready' | 'error';
+  url: string;
+  commandId?: number;
+  summary?: string;
+  note?: string;
+}
 
 interface OSStore {
   // OS Shell State
@@ -32,6 +48,14 @@ interface OSStore {
 
   // Seeding channel: a question routed from Spotlight into Copilot
   pendingCopilotPrompt: string | null;
+
+  // Agent Mode
+  agentMode: AgentMode;
+  agentTask: AgentTask | null;
+
+  // Browser bridge (agent tools drive the Browser app through these)
+  browserCommand: BrowserCommand | null;
+  browserStatus: BrowserStatus;
 
   // Actions
   setProfile: (profile: OSProfile) => void;
@@ -68,7 +92,26 @@ interface OSStore {
 
   // Seeding channel action
   setPendingCopilotPrompt: (prompt: string | null) => void;
+
+  // Agent Mode actions
+  setAgentMode: (mode: AgentMode) => void;
+  agentDispatch: (action: AgentAction) => void;
+
+  // Browser bridge actions
+  issueBrowserCommand: (type: BrowserCommand['type'], value: string) => number;
+  consumeBrowserCommand: (id: number) => void;
+  setBrowserStatus: (partial: Partial<BrowserStatus>) => void;
 }
+
+const getSavedAgentMode = (): AgentMode => {
+  try {
+    return localStorage.getItem('morphos_agent_mode') === 'auto-low' ? 'auto-low' : 'ask-every-time';
+  } catch {
+    return 'ask-every-time';
+  }
+};
+
+let browserCommandSeq = 0;
 
 const generateProviderId = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -158,6 +201,11 @@ export const useOSStore = create<OSStore>((set, get) => ({
   toasts: [],
 
   pendingCopilotPrompt: null,
+
+  agentMode: getSavedAgentMode(),
+  agentTask: null,
+  browserCommand: null,
+  browserStatus: { state: 'idle', url: '' },
 
   windows: [
     {
@@ -601,4 +649,25 @@ export const useOSStore = create<OSStore>((set, get) => ({
     set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
 
   setPendingCopilotPrompt: (prompt) => set({ pendingCopilotPrompt: prompt }),
+
+  setAgentMode: (mode) => {
+    try {
+      localStorage.setItem('morphos_agent_mode', mode);
+    } catch {}
+    set({ agentMode: mode });
+    if (get().agentTask) get().agentDispatch({ type: 'SET_AUTO_LOW', value: mode === 'auto-low' });
+  },
+
+  agentDispatch: (action) => set((state) => ({ agentTask: reduceTask(state.agentTask, action) })),
+
+  issueBrowserCommand: (type, value) => {
+    const id = ++browserCommandSeq;
+    set({ browserCommand: { id, type, value } });
+    return id;
+  },
+
+  consumeBrowserCommand: (id) =>
+    set((state) => (state.browserCommand && state.browserCommand.id === id ? { browserCommand: null } : state)),
+
+  setBrowserStatus: (partial) => set((state) => ({ browserStatus: { ...state.browserStatus, ...partial } })),
 }));
