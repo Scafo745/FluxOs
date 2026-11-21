@@ -148,6 +148,9 @@ pub async fn handle(State(e): State<AppState>, Auth(who): Auth, Json(req): Json<
                     text_result(format!("Rejected by FluxOS policy ({:?}): {}", plan.status, issues.join("; ")), true),
                 );
             }
+            if plan.status == PlanStatus::NoOp {
+                return ok(id, text_result("No change needed: the system already matches.".into(), false));
+            }
             if plan.status == PlanStatus::Proposed && plan.decision == Decision::AutoApply {
                 return match e.apply(&who, &plan.id).await {
                     Ok(p) => {

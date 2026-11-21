@@ -17,7 +17,7 @@ The rule the whole backend is built around: **the AI has wide reach, but every a
 | `agent/` | TypeScript | The AI orchestrator ("AI in the middle"). Local rule engine fast path, multi-provider LLM failover (Anthropic, OpenAI-compatible, Ollama), retrieval over industry knowledge, clarifying questions, validate-and-repair loop, streaming pipeline events. Runs unprivileged. |
 | `profiles/` | JSON | Industry profiles: default, gaming, education, telecom, finance (preview), healthcare (preview). |
 | `nix/`, `flake.nix` | Nix | Packages, a NixOS module that runs both services, and a bootable demo VM. |
-| `scripts/` | Bash | `dev.sh` boots the backend locally; `flux` is a small CLI for it. |
+| `scripts/` | Bash | `dev.sh` boots the backend locally; `flux` is a small CLI for it; `verify/` reproduces the verification. |
 
 ## Architecture
 
@@ -44,7 +44,14 @@ The rule the whole backend is built around: **the AI has wide reach, but every a
   └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Why two processes: the model's output is never trusted. The agent can be wrong, confused or prompt-injected, and it still cannot approve a tier 2+ change, run a command, or reach a tool outside the registry, because those checks live in fluxd. Details in [docs/architecture.md](docs/architecture.md); endpoints in [docs/api.md](docs/api.md).
+Why two processes: the model's output is never trusted. The agent can be wrong, confused or prompt-injected, and it still cannot approve a tier 2+ change, run a command, or reach a tool outside the registry, because those checks live in fluxd.
+
+| Document | Contents |
+|---|---|
+| [docs/prd.md](docs/prd.md) | The product requirements and tech stack this repository implements |
+| [docs/status.md](docs/status.md) | Current checkpoint: what is built, decisions, verification, next steps, open questions |
+| [docs/architecture.md](docs/architecture.md) | How a request becomes a running system, and where each guarantee is enforced |
+| [docs/api.md](docs/api.md) | fluxd and flux-agent endpoints, events and payloads |
 
 ## Quick start
 
@@ -108,16 +115,18 @@ The tier of a plan is the maximum of the declared tool tiers and the tiers of th
 
 The NixOS target builds every generation (`nixos-rebuild build`) before activating it, uses `nixos-rebuild boot` for kernel and boot changes so the running system is untouched until reboot, and restores the previous configuration if anything fails.
 
-## Verification status
+## Verification
 
-Verified in this repository's development environment:
+The checks behind the claims above live in `scripts/verify/` and all pass at the current checkpoint:
 
-- All six profiles and edge cases (exam kiosk, COSMIC, Plasma and GNOME tiling, NVIDIA open driver, hardened kernel) render NixOS modules that evaluate to complete system derivations against nixpkgs 26.05. This caught and fixed two real bugs (untyped dconf integers, missing portal in kiosk mode).
-- The flake evaluates: `packages.fluxd`, `packages.flux-agent`, and `nixosConfigurations.fluxos-vm` (toplevel and VM) with no warnings.
-- End-to-end scenarios against the running daemon: tier enforcement, approval with plan hash, blocked tools and blocked diffs, auto-rollback on a failed health check, crash recovery after an interrupted apply, tamper detection in the audit log (daemon degrades and refuses tier 2+), fleet mode, freeze windows, signed profile export and tampered-import rejection, MCP tool calls, SSE events.
-- The agent with the local engine, and the LLM path against a mock provider: failover from a failing provider, the repair loop, clarifying questions, and a prompt-injection attempt that the daemon held for approval.
+```bash
+cargo build -p fluxd && (cd agent && npm ci && npm run build)
+scripts/verify/daemon.sh     # 72 checks: tiers, approvals, blocked actions, rollback, recovery, audit, fleet mode
+scripts/verify/agent.sh      # 33 checks: local engine, LLM failover and repair loop (scripted mock), prompt injection
+scripts/verify/nix-eval.sh   # 25 checks: every profile and the bootable VM evaluate against nixpkgs 26.05 (needs nix)
+```
 
-Not verified yet: booting the VM image, `nixos-rebuild` on a real NixOS host, Nix builds of the packages (the environment lacked build sandboxing), and calls to real Anthropic, OpenAI or Ollama endpoints.
+Not verified yet: booting the VM image, `nixos-rebuild` on a real NixOS host, Nix builds of the packages, and calls to real Anthropic, OpenAI or Ollama endpoints. See [docs/status.md](docs/status.md) for the full checkpoint: decisions, gaps, frontend integration points, next steps and open questions.
 
 ## Repository layout
 
@@ -128,7 +137,8 @@ agent/src/              main, pipeline, heuristic, prompt, retrieval, context, f
 agent/knowledge/        industry and design knowledge for retrieval
 profiles/               industry profile overlays
 nix/                    packages, NixOS module, VM host and its generation-1 module
-docs/                   architecture and API reference
+scripts/verify/         end-to-end verification (daemon, agent, Nix evaluation)
+docs/                   PRD, status, architecture and API reference
 ```
 
 ## License
