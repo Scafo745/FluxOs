@@ -172,22 +172,23 @@ export async function startAgentTask(prompt: string, cloudConfig: CloudConfig): 
   }
 }
 
-export function approveStep(): void {
+export function approveStep(index?: number): void {
   const t = store().agentTask;
   if (!t || t.phase !== 'awaiting_approval') return;
-  dispatch({ type: 'APPROVE', by: 'user', index: t.current });
+  dispatch({ type: 'APPROVE', by: 'user', index: index ?? t.current });
 }
 
 export function approveAllLow(): void {
   dispatch({ type: 'APPROVE_ALL_LOW' });
 }
 
-export function denyStep(mode: 'skip' | 'stop'): void {
+export function denyStep(mode: 'skip' | 'stop', index?: number): void {
   const t = store().agentTask;
   if (!t || t.phase !== 'awaiting_approval') return;
+  if (index !== undefined && index !== t.current) return;
   const run = t.steps[t.current];
   if (run) auditStep(run.step, 'BLOCKED', mode === 'stop' ? 'Denied by user, task stopped' : 'Denied by user, step skipped');
-  dispatch({ type: 'DENY', mode, index: t.current });
+  dispatch({ type: 'DENY', mode, index: index ?? t.current });
 }
 
 export function continueAfterFailure(): void {

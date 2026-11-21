@@ -430,7 +430,6 @@ export const Copilot: React.FC = () => {
             type="button"
             role="switch"
             aria-checked={agentMode === 'auto-low'}
-            aria-pressed={agentMode === 'auto-low'}
             onClick={() => setAgentMode(agentMode === 'auto-low' ? 'ask-every-time' : 'auto-low')}
             title="Choose whether the agent asks before every action or only before medium and high risk actions"
             className="px-2.5 py-1 rounded-[6px] border text-[10px] font-mono hover:bg-geist-hairlineSoft focus:outline-none focus-visible:ring-2 focus-visible:ring-geist-link/60"
@@ -439,7 +438,7 @@ export const Copilot: React.FC = () => {
               color: agentMode === 'auto-low' ? 'var(--link, #0070f3)' : 'var(--text-body, #4d4d4d)',
             }}
           >
-            {agentMode === 'auto-low' ? 'Auto-approve low risk (tiers 0-1)' : 'Ask every time'}
+            Auto-approve low risk (tiers 0-1)
           </button>
           <div
             className="flex items-center space-x-1.5 px-2.5 py-1 rounded-[6px] border font-mono text-[10px]"

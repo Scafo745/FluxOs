@@ -114,6 +114,7 @@ async function driveBrowser(type: 'search' | 'navigate', value: string, signal: 
   await nextFrames(2);
   const id = useOSStore.getState().issueBrowserCommand(type, value);
   const status = await awaitBrowser(id, signal, 20000);
+  if (signal.aborted || !status) useOSStore.getState().consumeBrowserCommand(id);
   if (signal.aborted) return { ok: false, error: 'Cancelled.' };
   if (!status) return { ok: false, error: 'The browser did not finish loading within 20 seconds.' };
   if (status.state === 'error') return { ok: false, error: status.note || 'The browser reported an error.' };
@@ -357,7 +358,8 @@ export const TOOLS: ToolDef[] = [
       const store = useOSStore.getState();
       const { profile, source } = await compilePromptAsync(a.prompt, store.cloudConfig);
       if (ctx.signal.aborted) return { ok: false, error: 'Cancelled.' };
-      store.setProfile(profile);
+      // Apply only the look and feel. Never let an unattended tool change the security posture.
+      store.setProfile({ ...profile, securityLevel: store.profile.securityLevel, userRole: store.profile.userRole });
       return { ok: true, text: `Applied theme "${profile.name}" (${source} engine).` };
     },
   },

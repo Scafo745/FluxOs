@@ -196,7 +196,7 @@ const ApprovalCard: React.FC<{ task: AgentTask; reduced: boolean }> = ({ task, r
         <button
           ref={approveRef}
           type="button"
-          onClick={approveStep}
+          onClick={() => approveStep(task.current)}
           aria-label={`Approve step ${task.current + 1}: ${run.step.tool}`}
           className={btn}
           style={{ background: 'var(--accent, #171717)', color: '#ffffff', borderColor: 'var(--accent, #171717)' }}
@@ -205,7 +205,7 @@ const ApprovalCard: React.FC<{ task: AgentTask; reduced: boolean }> = ({ task, r
         </button>
         <button
           type="button"
-          onClick={() => denyStep('skip')}
+          onClick={() => denyStep('skip', task.current)}
           aria-label={`Deny and skip step ${task.current + 1}`}
           className={`${btn} hover:bg-geist-hairlineSoft`}
           style={{ borderColor: 'var(--hairline, #ebebeb)', color: 'var(--text-body, #4d4d4d)' }}
@@ -214,7 +214,7 @@ const ApprovalCard: React.FC<{ task: AgentTask; reduced: boolean }> = ({ task, r
         </button>
         <button
           type="button"
-          onClick={() => denyStep('stop')}
+          onClick={() => denyStep('stop', task.current)}
           aria-label="Stop task"
           className={`${btn} hover:bg-geist-hairlineSoft`}
           style={{ borderColor: 'var(--hairline, #ebebeb)', color: '#ee0000' }}

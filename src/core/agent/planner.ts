@@ -89,6 +89,11 @@ export function validatePlan(
 
 // ───────────────────────── local deterministic planner ─────────────────────────
 
+const SHELL_COMMANDS = new Set([
+  'ls', 'cd', 'pwd', 'cat', 'echo', 'grep', 'touch', 'mkdir', 'rm', 'chmod', 'ps', 'top', 'kill', 'whoami',
+  'getenforce', 'setenforce', 'neofetch', 'audit', 'help', 'clear', 'morph', 'payments', 'pkg', 'npm', 'apt', 'apt-get',
+]);
+
 const ACTION_VERB =
   /^(?:open|launch|start|run|execute|exec|search|google|look\s*up|go\s+to|visit|navigate|browse|head\s+to|take|capture|grab|snap|screenshot|screen\s*shot|show|display|let\s+me\s+see|read|cat|install|switch|change|set|close|quit|exit|focus|bring)\b/i;
 
@@ -290,7 +295,8 @@ export function localPlan(prompt: string, ctx: PlannerCtx = defaultCtx()): PlanR
       if (app) {
         push('open_app', { app }, `You asked to run ${app}`);
         lastApp = app;
-      } else if (cmd) {
+      } else if (cmd && (unquote(m[1]) !== restore(m[1]).trim() || SHELL_COMMANDS.has(cmd.split(/\s+/)[0].toLowerCase()))) {
+        // Only quoted text or a known shell command counts. Plain English falls through to the old Copilot branches.
         push('run_shell', { command: cmd }, 'You asked to run a command');
       }
       continue;

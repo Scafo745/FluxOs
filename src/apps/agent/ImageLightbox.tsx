@@ -11,6 +11,10 @@ interface Props {
 /** Full-size image viewer. Esc closes; Tab stays on the close button. */
 export const ImageLightbox: React.FC<Props> = ({ src, alt, onClose }) => {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -18,7 +22,7 @@ export const ImageLightbox: React.FC<Props> = ({ src, alt, onClose }) => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
       } else if (e.key === 'Tab') {
         e.preventDefault();
         closeRef.current?.focus();
@@ -29,7 +33,7 @@ export const ImageLightbox: React.FC<Props> = ({ src, alt, onClose }) => {
       window.removeEventListener('keydown', onKey, true);
       previous?.focus?.();
     };
-  }, [onClose]);
+  }, []);
 
   return createPortal(
     <div
