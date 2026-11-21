@@ -2,8 +2,9 @@ import { useOSStore } from '../store';
 import { compilePromptAsync } from '../prompt-compiler';
 import { executeShell } from '../../kernel/shell';
 import { checkDestructiveSignature, evaluateFileSecurity } from '../../kernel/security';
+import { toPng } from 'html-to-image';
 import type { AppId } from '../types';
-import type { ArgsSchema, RiskTier, ToolArgs, ToolDef, ToolResult } from './types';
+import type { ArgsSchema, RiskTier, ToolArgs, ToolContext, ToolDef, ToolResult } from './types';
 
 /**
  * Tool registry. Default deny: only tools registered here can ever be planned
@@ -74,11 +75,149 @@ function findWindow(app: string) {
 
 const appField = { type: 'enum', required: true, values: AGENT_APPS } as const;
 
-/** Placeholder for tools whose runtime (browser bridge, DOM capture) is attached separately. */
-const notAvailable = async (): Promise<ToolResult> => ({
-  ok: false,
-  error: 'This tool is not available in this build.',
-});
+const sleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const t = window.setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => { window.clearTimeout(t); resolve(); }, { once: true });
+  });
+
+const nextFrames = (n: number) =>
+  new Promise<void>((resolve) => {
+    const step = (left: number) => (left <= 0 ? resolve() : requestAnimationFrame(() => step(left - 1)));
+    step(n);
+  });
+
+/** Waits until the browser reports the given command as finished (ready or error). */
+function awaitBrowser(id: number, signal: AbortSignal, timeoutMs: number): Promise<{ state: string; summary?: string; note?: string; url: string } | null> {
+  return new Promise((resolve) => {
+    const finish = (v: { state: string; summary?: string; note?: string; url: string } | null) => {
+      window.clearTimeout(timer);
+      unsub();
+      signal.removeEventListener('abort', onAbort);
+      resolve(v);
+    };
+    const check = (st: ReturnType<typeof useOSStore.getState>['browserStatus']) => {
+      if (st.commandId === id && (st.state === 'ready' || st.state === 'error')) finish(st);
+    };
+    const onAbort = () => finish(null);
+    const timer = window.setTimeout(() => finish(null), timeoutMs);
+    const unsub = useOSStore.subscribe((state) => check(state.browserStatus));
+    signal.addEventListener('abort', onAbort, { once: true });
+    check(useOSStore.getState().browserStatus);
+  });
+}
+
+async function driveBrowser(type: 'search' | 'navigate', value: string, signal: AbortSignal): Promise<ToolResult> {
+  const store = useOSStore.getState();
+  store.openApp('browser');
+  // Let a freshly opened Browser mount and register its effect.
+  await nextFrames(2);
+  const id = useOSStore.getState().issueBrowserCommand(type, value);
+  const status = await awaitBrowser(id, signal, 20000);
+  if (signal.aborted) return { ok: false, error: 'Cancelled.' };
+  if (!status) return { ok: false, error: 'The browser did not finish loading within 20 seconds.' };
+  if (status.state === 'error') return { ok: false, error: status.note || 'The browser reported an error.' };
+  await nextFrames(2);
+  await sleep(150, signal);
+  const where = type === 'search' ? `Searched for "${value}"` : `Navigated to ${value}`;
+  const preview = status.summary ? ` Answer preview (untrusted, display only): ${status.summary}` : '';
+  return { ok: true, text: `${where}.${preview}`, note: status.note };
+}
+
+const pad = (n: number) => String(n).padStart(2, '0');
+function stamp(): string {
+  const d = new Date();
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+const PNG_PREFIX = 'data:image/png;base64,';
+
+async function captureScreenshot(a: ToolArgs, ctx: ToolContext): Promise<ToolResult> {
+  const store = useOSStore.getState();
+  const isDesktop = a.target === 'desktop';
+  const app = a.app || 'browser';
+  let node: HTMLElement | null = null;
+
+  if (!isDesktop) {
+    const win = findWindow(app);
+    if (!win) return { ok: false, error: `The ${app} app is not open, so there is no window to capture.` };
+    if (win.isMinimized) store.focusWindow(win.id);
+  }
+
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && !ctx.signal.aborted) {
+    if (isDesktop) {
+      node = document.querySelector<HTMLElement>('[data-desktop-root]');
+    } else {
+      const inner = document.querySelector<HTMLElement>(`[data-window-id][data-window-app="${app}"]`);
+      if (inner && !inner.querySelector('[aria-label="Loading app"]')) node = inner.parentElement || inner;
+    }
+    if (node) break;
+    await sleep(100, ctx.signal);
+  }
+  if (ctx.signal.aborted) return { ok: false, error: 'Cancelled.' };
+  if (!node) {
+    return { ok: false, error: isDesktop ? 'The desktop is not available to capture.' : `The ${app} window did not finish loading in time.` };
+  }
+
+  await nextFrames(2);
+  const root = document.querySelector<HTMLElement>('[data-desktop-root]');
+  const canvas = (root && getComputedStyle(root).getPropertyValue('--canvas').trim()) || '#fafafa';
+  const hadIframe = node.querySelector('iframe') !== null || node.tagName === 'IFRAME';
+  const base = {
+    pixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
+    backgroundColor: canvas,
+    // The window root is positioned with a CSS transform; reset it so the capture is not offset.
+    style: {
+      backdropFilter: 'none',
+      WebkitBackdropFilter: 'none',
+      ...(isDesktop ? {} : { transform: 'none', top: '0', left: '0' }),
+    } as Partial<CSSStyleDeclaration>,
+    filter: (n: Node) => !(n instanceof HTMLElement && n.tagName === 'IFRAME'),
+  };
+  let dataUrl: string;
+  try {
+    try {
+      dataUrl = await toPng(node, base);
+    } catch {
+      dataUrl = await toPng(node, { ...base, skipFonts: true });
+    }
+  } catch (e) {
+    return { ok: false, error: `Screenshot failed: ${e instanceof Error ? e.message : 'unknown error'}` };
+  }
+  if (ctx.signal.aborted) return { ok: false, error: 'Cancelled.' };
+  if (!dataUrl.startsWith(PNG_PREFIX) || dataUrl.length <= 2000) {
+    return { ok: false, error: 'The screenshot came out empty, so it was discarded.' };
+  }
+
+  const dirPath = '/home/developer/Pictures';
+  const path = `${dirPath}/screenshot-${stamp()}.png`;
+  const fresh = useOSStore.getState();
+  const dir = fresh.filesystem.find((f) => f.path === dirPath && f.type === 'directory');
+  let saveNote = '';
+  if (!dir) {
+    saveNote = 'The Pictures folder does not exist, so the image was not saved.';
+  } else {
+    const sec = evaluateFileSecurity(dir, 'write', fresh.profile, fresh.selinux);
+    if (!sec.allowed) {
+      saveNote = `Not saved to Pictures: ${sec.message || 'permission denied'}.`;
+      fresh.addAuditLog(`agent.screenshot save ${path}`, 'BLOCKED', saveNote, 'WARNING');
+    } else {
+      fresh.writeFile(path, dataUrl);
+      fresh.addAuditLog(`agent.screenshot save ${path}`, 'ALLOWED', 'Screenshot saved to Pictures', 'INFO');
+      ctx.scratch.lastImagePath = path;
+    }
+  }
+  ctx.scratch.lastImage = dataUrl;
+  const what = isDesktop ? 'the desktop' : `the ${app} window`;
+  const noteParts = [saveNote, hadIframe ? 'Embedded external sites (iframes) cannot be captured and appear blank.' : ''].filter(Boolean);
+  return {
+    ok: true,
+    text: `Captured ${what}${saveNote ? '. ' + saveNote : ` and saved to ${path}`}`,
+    imageDataUrl: dataUrl,
+    note: noteParts.join(' ') || undefined,
+  };
+}
 
 export const TOOLS: ToolDef[] = [
   {
@@ -128,7 +267,7 @@ export const TOOLS: ToolDef[] = [
     argsSchema: { query: { type: 'string', required: true, maxLen: 200 } },
     timeoutMs: 30000,
     describe: (a) => `Search the browser for "${a.query}"`,
-    execute: notAvailable,
+    execute: (a, ctx) => driveBrowser('search', a.query, ctx.signal),
   },
   {
     name: 'browser_navigate',
@@ -137,7 +276,7 @@ export const TOOLS: ToolDef[] = [
     argsSchema: { url: { type: 'string', required: true, maxLen: 300, pattern: URL_PATTERN } },
     timeoutMs: 30000,
     describe: (a) => `Navigate the browser to ${a.url}`,
-    execute: notAvailable,
+    execute: (a, ctx) => driveBrowser('navigate', a.url, ctx.signal),
   },
   {
     name: 'screenshot',
@@ -149,7 +288,7 @@ export const TOOLS: ToolDef[] = [
     },
     timeoutMs: 30000,
     describe: (a) => (a.target === 'desktop' ? 'Capture the whole desktop' : `Capture the ${a.app || 'browser'} window`),
-    execute: notAvailable,
+    execute: captureScreenshot,
   },
   {
     name: 'show_image',

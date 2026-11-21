@@ -25,6 +25,7 @@ export const Desktop: React.FC = () => {
 
   return (
     <div
+      data-desktop-root
       onContextMenu={e => { e.preventDefault(); setCtx({ x: e.clientX, y: e.clientY }); }}
       onClick={() => ctx && setCtx(null)}
       className={`fixed inset-0 overflow-hidden select-none font-sans transition-all duration-700 theme-${profile.theme}`}

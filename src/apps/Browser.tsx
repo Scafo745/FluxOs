@@ -41,7 +41,7 @@ const normalizeUrl = (raw: string): string => {
 const isExternal = (url: string): boolean => /^https?:\/\//i.test(url);
 
 export const Browser: React.FC = () => {
-  const { cloudConfig } = useOSStore();
+  const { cloudConfig, browserCommand } = useOSStore();
   const [history, setHistory] = useState<string[]>([HOME_URL]);
   const [index, setIndex] = useState(0);
   const [address, setAddress] = useState(HOME_URL);
@@ -86,6 +86,74 @@ export const Browser: React.FC = () => {
   };
 
   const goHome = () => navigate(HOME_URL);
+
+  const lastCommandId = useRef(0);
+  const settleTimer = useRef<number | null>(null);
+  const activeCommand = useRef<number | undefined>(undefined);
+  const activeTarget = useRef('');
+  const currentUrlRef = useRef(currentUrl);
+  currentUrlRef.current = currentUrl;
+
+  const clearSettleTimer = () => {
+    if (settleTimer.current !== null) {
+      window.clearTimeout(settleTimer.current);
+      settleTimer.current = null;
+    }
+  };
+
+  const reportReady = (summary?: string, note?: string) => {
+    clearSettleTimer();
+    const { setBrowserStatus } = useOSStore.getState();
+    setBrowserStatus({ state: 'ready', url: currentUrlRef.current, commandId: activeCommand.current, summary, note });
+  };
+
+  // Agent bridge: consume a command issued through the store, then report status.
+  useEffect(() => {
+    if (!browserCommand || browserCommand.id === lastCommandId.current) return;
+    const cmd = browserCommand;
+    lastCommandId.current = cmd.id;
+    const store = useOSStore.getState();
+    store.consumeBrowserCommand(cmd.id);
+    const target = cmd.type === 'search' ? `morphos://search?q=${encodeURIComponent(cmd.value)}` : normalizeUrl(cmd.value);
+    activeCommand.current = cmd.id;
+    activeTarget.current = target;
+    clearSettleTimer();
+    store.setBrowserStatus({ state: 'loading', url: target, commandId: cmd.id, summary: undefined, note: undefined });
+    if (target === currentUrlRef.current) {
+      setFrameError(false);
+      setAddress(target);
+      setReloadKey((k) => k + 1);
+    } else {
+      navigate(target);
+    }
+    if (isExternal(target)) {
+      settleTimer.current = window.setTimeout(() => {
+        reportReady(undefined, 'The page did not report that it finished loading. Sites that block embedding cannot be detected.');
+      }, 8000);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browserCommand]);
+
+  useEffect(() => clearSettleTimer, []);
+
+  // morphos:// pages (other than search) render synchronously: report ready once painted.
+  useEffect(() => {
+    if (activeCommand.current === undefined) return;
+    if (currentUrl === activeTarget.current && currentUrl.startsWith('morphos://') && !currentUrl.startsWith('morphos://search')) {
+      reportReady();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUrl, reloadKey]);
+
+  const onSearchSettled = (r: { answer: string; source: string; failed: boolean }) => {
+    if (activeCommand.current === undefined) return;
+    if (r.failed) {
+      clearSettleTimer();
+      useOSStore.getState().setBrowserStatus({ state: 'error', url: currentUrlRef.current, commandId: activeCommand.current, note: 'The search could not be completed.' });
+      return;
+    }
+    reportReady(r.answer.slice(0, 300), r.source === 'local' ? 'Answered by the offline local assistant.' : undefined);
+  };
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -180,11 +248,22 @@ export const Browser: React.FC = () => {
               title="External site"
               className="w-full h-full border-0 bg-white"
               sandbox="allow-scripts allow-same-origin allow-forms"
-              onError={() => setFrameError(true)}
+              onLoad={() => {
+                if (activeCommand.current !== undefined) {
+                  reportReady(undefined, 'Frame loaded. Sites that block embedding cannot be detected.');
+                }
+              }}
+              onError={() => {
+                setFrameError(true);
+                clearSettleTimer();
+                if (activeCommand.current !== undefined) {
+                  useOSStore.getState().setBrowserStatus({ state: 'error', url: currentUrlRef.current, commandId: activeCommand.current, note: 'The page failed to load.' });
+                }
+              }}
             />
           )
         ) : searchQuery ? (
-          <SearchResults key={`${searchQuery}-${reloadKey}`} query={searchQuery} cloudConfig={cloudConfig} onNavigate={navigate} />
+          <SearchResults key={`${searchQuery}-${reloadKey}`} query={searchQuery} cloudConfig={cloudConfig} onNavigate={navigate} onSettled={onSearchSettled} />
         ) : (
           <StartPage key={reloadKey} query={searchQuery} onNavigate={navigate} />
         )}
@@ -224,7 +303,8 @@ const SearchResults: React.FC<{
   query: string;
   cloudConfig: CloudConfig;
   onNavigate: (url: string) => void;
-}> = ({ query, cloudConfig, onNavigate }) => {
+  onSettled?: (r: { answer: string; source: string; failed: boolean }) => void;
+}> = ({ query, cloudConfig, onNavigate, onSettled }) => {
   const [search, setSearch] = useState(query);
   const [loading, setLoading] = useState(true);
   const [answer, setAnswer] = useState('');
@@ -262,12 +342,15 @@ const SearchResults: React.FC<{
           }
         }
         setLoading(false);
+        onSettled?.({ answer: result.answer, source: result.source, failed: false });
       })
       .catch(() => {
         if (id !== reqId.current) return;
         setFailed(true);
         setLoading(false);
+        onSettled?.({ answer: '', source: 'local', failed: true });
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, cloudConfig]);
 
   // Gate the display on the SAME predicate the answer path uses so the 'add a
