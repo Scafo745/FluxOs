@@ -1,0 +1,397 @@
+@import "tailwindcss";
+
+/*
+ * Every color, font, radius and duration below comes from fluxd's design
+ * tokens (GET /v1/theme.css, the same tokens the OS uses for GTK, KDE and
+ * Hyprland). These defaults are Flux Midnight, shown until the live theme
+ * arrives. When the AI changes the OS theme, this UI changes with it.
+ */
+:root {
+  color-scheme: dark;
+  --flux-color-background: #0e0c15;
+  --flux-color-surface: #161322;
+  --flux-color-surface-raised: #1f1b2f;
+  --flux-color-border: #332e48;
+  --flux-color-text: #f1f0f5;
+  --flux-color-text-muted: #aeabba;
+  --flux-color-accent: #7c5cff;
+  --flux-color-accent-text: #0b0b10;
+  --flux-color-secondary: #f5bd3d;
+  --flux-color-success: #54d489;
+  --flux-color-warning: #f6ae31;
+  --flux-color-danger: #e7404e;
+  --flux-color-glass: rgb(22 19 34 / 0.8);
+  --flux-font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --flux-font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --flux-font-display: "Inter", sans-serif;
+  --flux-font-weight-regular: 400;
+  --flux-font-weight-bold: 650;
+  --flux-line-height: 1.5;
+  --flux-font-size-xs: 9px;
+  --flux-font-size-sm: 11.2px;
+  --flux-font-size-base: 14px;
+  --flux-font-size-lg: 17.5px;
+  --flux-font-size-xl: 21.9px;
+  --flux-font-size-2xl: 27.3px;
+  --flux-font-size-3xl: 34.2px;
+  --flux-radius-sm: 6px;
+  --flux-radius-md: 10px;
+  --flux-radius-lg: 16px;
+  --flux-border-width: 1px;
+  --flux-duration-fast: 120ms;
+  --flux-duration-base: 220ms;
+  --flux-duration-slow: 360ms;
+  --flux-easing: cubic-bezier(0.2, 0, 0, 1);
+  --flux-blur: 24px;
+  --flux-shadow-raised: 0 8px 24px rgb(0 0 0 / 0.35);
+  --flux-window-radius: 12px;
+  --flux-window-gap: 8px;
+  --flux-dock-size: 52px;
+  --flux-panel-height: 28px;
+  --flux-text-scale: 1;
+}
+
+@theme inline {
+  --color-bg: var(--flux-color-background);
+  --color-surface: var(--flux-color-surface);
+  --color-raised: var(--flux-color-surface-raised);
+  --color-line: var(--flux-color-border);
+  --color-fg: var(--flux-color-text);
+  --color-muted: var(--flux-color-text-muted);
+  --color-accent: var(--flux-color-accent);
+  --color-on-accent: var(--flux-color-accent-text);
+  --color-secondary: var(--flux-color-secondary);
+  --color-ok: var(--flux-color-success);
+  --color-warn: var(--flux-color-warning);
+  --color-bad: var(--flux-color-danger);
+
+  --font-sans: var(--flux-font-sans);
+  --font-mono: var(--flux-font-mono);
+  --font-display: var(--flux-font-display);
+
+  /* The OS type scale, never smaller than legible UI text. */
+  --text-xs: max(10.5px, var(--flux-font-size-xs));
+  --text-xs--line-height: 1.4;
+  --text-sm: max(12px, var(--flux-font-size-sm));
+  --text-sm--line-height: 1.45;
+  --text-base: var(--flux-font-size-base);
+  --text-base--line-height: var(--flux-line-height);
+  --text-lg: var(--flux-font-size-lg);
+  --text-lg--line-height: 1.35;
+  --text-xl: var(--flux-font-size-xl);
+  --text-xl--line-height: 1.25;
+  --text-2xl: var(--flux-font-size-2xl);
+  --text-2xl--line-height: 1.2;
+  --text-3xl: var(--flux-font-size-3xl);
+  --text-3xl--line-height: 1.1;
+
+  --radius-sm: var(--flux-radius-sm);
+  --radius-md: var(--flux-radius-md);
+  --radius-lg: var(--flux-radius-lg);
+  --radius-xl: calc(var(--flux-radius-lg) * 1.35);
+
+  --shadow-raised: var(--flux-shadow-raised);
+  --ease-flux: var(--flux-easing);
+  --default-transition-duration: var(--flux-duration-base);
+  --default-transition-timing-function: var(--flux-easing);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: var(--flux-color-background);
+    color: var(--flux-color-text);
+    font-family: var(--flux-font-sans);
+    font-size: var(--flux-font-size-base);
+    line-height: var(--flux-line-height);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--flux-color-accent) 40%, transparent);
+  }
+  :focus-visible {
+    outline: 2px solid var(--flux-color-accent);
+    outline-offset: 2px;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--flux-color-text) 22%, transparent) transparent;
+  }
+  button {
+    cursor: default;
+  }
+}
+
+@layer components {
+  /* Translucent surfaces follow the effects tokens; with blur off they turn opaque. */
+  .glass {
+    background: var(--flux-color-glass);
+    backdrop-filter: blur(var(--flux-blur)) saturate(1.5);
+    -webkit-backdrop-filter: blur(var(--flux-blur)) saturate(1.5);
+  }
+  [data-blur="off"] .glass {
+    background: var(--flux-color-surface);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .card {
+    border: var(--flux-border-width) solid color-mix(in oklab, var(--flux-color-border) 80%, transparent);
+    background: color-mix(in oklab, var(--flux-color-surface) 86%, transparent);
+    border-radius: var(--flux-radius-lg);
+  }
+  .hairline {
+    border-color: color-mix(in oklab, var(--flux-color-border) 75%, transparent);
+  }
+  /* Gradient border for the AI surfaces. */
+  .glow-ring {
+    position: relative;
+  }
+  .glow-ring::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(
+      135deg,
+      color-mix(in oklab, var(--flux-color-accent) 85%, transparent),
+      color-mix(in oklab, var(--flux-color-secondary) 55%, transparent) 55%,
+      color-mix(in oklab, var(--flux-color-accent) 30%, transparent)
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+  .text-gradient {
+    background: linear-gradient(
+      100deg,
+      var(--flux-color-text) 0%,
+      var(--flux-color-accent) 35%,
+      var(--flux-color-secondary) 65%,
+      var(--flux-color-text) 100%
+    );
+    background-size: 300% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: flux-shimmer calc(var(--flux-duration-slow) * 16) linear infinite;
+  }
+  .code-scroll {
+    font-family: var(--flux-font-mono);
+    font-size: max(12px, calc(var(--flux-font-size-sm) * 1.05));
+    line-height: 1.6;
+    tab-size: 2;
+  }
+  .wallpaper-layer {
+    animation: flux-fade-in 1100ms var(--flux-easing) both;
+  }
+  .win-enter {
+    animation: flux-pop calc(var(--flux-duration-base) * 1.2) var(--flux-easing) both;
+  }
+  .rise-in {
+    animation: flux-rise calc(var(--flux-duration-base) * 1.4) var(--flux-easing) both;
+  }
+  .fade-in {
+    animation: flux-fade-in var(--flux-duration-slow) var(--flux-easing) both;
+  }
+  /* The desktop chrome arrives from its own edge after boot. */
+  .chrome-down {
+    animation: flux-slide-down calc(var(--flux-duration-slow) * 1.6) var(--flux-easing) both;
+  }
+  .chrome-up {
+    animation: flux-slide-up calc(var(--flux-duration-slow) * 1.6) var(--flux-easing) both;
+  }
+  /* Opacity only: the dock positions itself with transforms. */
+  .chrome-reveal {
+    animation: flux-fade-in calc(var(--flux-duration-slow) * 2) var(--flux-easing) both;
+    animation-delay: calc(var(--flux-duration-base) * 1.2);
+  }
+  .grain {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    opacity: 0.05;
+    mix-blend-mode: overlay;
+  }
+}
+
+/* While the OS theme changes, every color glides to its new value. */
+.theme-morph,
+.theme-morph *,
+.theme-morph *::before,
+.theme-morph *::after {
+  transition-property: color, background-color, border-color, fill, stroke, box-shadow, outline-color !important;
+  transition-duration: 750ms !important;
+  transition-timing-function: var(--flux-easing) !important;
+}
+
+/* Reduced motion: from the OS accessibility setting or the browser. */
+[data-motion="reduced"] *,
+[data-motion="reduced"] *::before,
+[data-motion="reduced"] *::after {
+  animation-duration: 1ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+@keyframes flux-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes flux-spin-rev {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+@keyframes flux-shimmer {
+  to {
+    background-position: -300% 0;
+  }
+}
+@keyframes flux-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes flux-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes flux-pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.975);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes flux-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+}
+@keyframes flux-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+@keyframes flux-draw {
+  from {
+    stroke-dashoffset: 100;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes flux-drift-a {
+  0%,
+  100% {
+    transform: translate3d(-8%, -6%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(10%, 8%, 0) scale(1.15);
+  }
+}
+@keyframes flux-drift-b {
+  0%,
+  100% {
+    transform: translate3d(6%, 10%, 0) scale(1.1);
+  }
+  50% {
+    transform: translate3d(-12%, -4%, 0) scale(0.95);
+  }
+}
+@keyframes flux-drift-c {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(0.9);
+  }
+  50% {
+    transform: translate3d(8%, -10%, 0) scale(1.2);
+  }
+}
+@keyframes flux-scan {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+@keyframes flux-exit {
+  to {
+    opacity: 0;
+    transform: scale(1.06);
+    filter: blur(6px);
+  }
+}
+@keyframes flux-slide-down {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes flux-slide-up {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes flux-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
