@@ -1,0 +1,31 @@
+{
+  "id": "education",
+  "name": "Classroom",
+  "version": "1.0.0",
+  "vertical": "education",
+  "summary": "Friendly GNOME desktop with office, coding and learning apps. Exam lock-down and clean-state labs available.",
+  "description": "Browser, LibreOffice, Thonny and VSCodium for coding, GCompris, Stellarium, GeoGebra and Anki, video meetings, printing. Readable Lexend type and a warm light theme. Use session.configure for exam mode or shared labs with an ephemeral home.",
+  "tags": ["education", "school", "classroom", "students", "teachers", "exam", "lab", "university"],
+  "integrations": ["Learning platforms in the browser (Moodle, Canvas, Google Classroom)", "Video meetings (Jitsi, Zoom)", "Exam lock-down via session.configure"],
+  "style": "focus",
+  "palette": { "accent": "#ff7a3d", "secondary": "#2bb673", "scheme": "light" },
+  "overlay": {
+    "boot": { "splash_theme": "spinner" },
+    "packages": {
+      "system": ["firefox", "libreoffice", "thonny", "python3", "vscodium", "gcompris", "stellarium", "geogebra", "anki", "git"],
+      "flatpak": ["jitsi-meet", "zoom"]
+    },
+    "services": { "enabled": ["flatpak", "fwupd", "printing", "avahi"] },
+    "security": { "screen_lock": { "enabled": true, "idle_minutes": 15 } },
+    "desktop": { "environment": "gnome", "wallpaper": { "style": "mesh", "seed": 11 } },
+    "design": {
+      "theme_name": "Chalk and Sunshine",
+      "tokens": {
+        "typography": { "font_sans": "Lexend", "font_display": "Lexend", "font_mono": "JetBrains Mono", "base_size_px": 15 },
+        "shape": { "radius_sm_px": 8, "radius_md_px": 14, "radius_lg_px": 22 }
+      },
+      "icon_theme": "Papirus-Light",
+      "cursor_theme": "Bibata-Modern-Classic"
+    }
+  }
+}

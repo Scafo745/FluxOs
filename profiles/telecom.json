@@ -1,0 +1,42 @@
+{
+  "id": "telecom",
+  "name": "Network Operations Center",
+  "version": "1.0.0",
+  "vertical": "telecom",
+  "summary": "Dense dark tiling layout, packet analysis, SNMP and NETCONF clients, SIP tools and tuned networking.",
+  "description": "Hyprland tiling with eight workspaces for dashboards and terminals. Wireshark, termshark, tcpdump, mtr, iperf3, Net-SNMP, ncclient, sngrep, SIPp, baresip, serial consoles, tmux and Ansible. Large socket buffers, BBR and fq, chrony time sync, five-minute auto-lock.",
+  "tags": ["telecom", "noc", "network", "operations", "sip", "voip", "snmp", "netconf", "isp", "monitoring"],
+  "integrations": ["Wireshark and termshark packet analysis", "SNMP and NETCONF clients", "SIP troubleshooting (sngrep, SIPp, baresip)"],
+  "style": "ops-center",
+  "palette": { "accent": "#2ee6a6", "secondary": "#ffb020", "scheme": "dark" },
+  "overlay": {
+    "boot": { "splash_theme": "tech_a" },
+    "kernel": {
+      "sysctl": {
+        "net.core.rmem_max": 134217728,
+        "net.core.wmem_max": 134217728,
+        "net.ipv4.tcp_rmem": "4096 87380 134217728",
+        "net.ipv4.tcp_wmem": "4096 65536 134217728",
+        "net.core.netdev_max_backlog": 250000,
+        "net.core.default_qdisc": "fq",
+        "net.ipv4.tcp_congestion_control": "bbr",
+        "net.ipv4.tcp_mtu_probing": 1
+      }
+    },
+    "packages": {
+      "system": ["wireshark", "termshark", "tcpdump", "nmap", "mtr", "iperf3", "net-snmp", "netconf-client", "sngrep", "sipp", "baresip", "minicom", "picocom", "tmux", "ansible", "ipcalc", "dnsutils", "btop", "iftop", "nethogs", "firefox", "remmina"],
+      "flatpak": []
+    },
+    "services": { "enabled": ["flatpak", "fwupd", "chrony"] },
+    "security": { "screen_lock": { "enabled": true, "idle_minutes": 5 } },
+    "desktop": { "environment": "hyprland", "wallpaper": { "style": "grid", "seed": 3 } },
+    "design": {
+      "theme_name": "NOC Phosphor",
+      "tokens": {
+        "typography": { "font_sans": "IBM Plex Sans", "font_display": "IBM Plex Sans", "font_mono": "IBM Plex Mono", "base_size_px": 13, "line_height": 1.35 },
+        "shape": { "spacing_unit_px": 3 }
+      },
+      "icon_theme": "Papirus-Dark"
+    }
+  }
+}

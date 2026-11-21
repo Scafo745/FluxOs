@@ -1,0 +1,9 @@
+{
+  "id": "default",
+  "name": "FluxOS Default",
+  "version": "1.0.0",
+  "summary": "Balanced everyday desktop: Plasma, LTS kernel, glass dock and the Flux Midnight theme.",
+  "description": "The baseline every machine boots into on first start. Safe defaults: firewall on, AppArmor on, audit on, LTS kernel.",
+  "tags": ["default", "desktop", "general", "reset"],
+  "overlay": {}
+}

@@ -1,0 +1,10 @@
+/target
+/result
+/result-*
+/.flux-*
+node_modules/
+agent/dist/
+*.log
+.env
+.env.*
+!.env.example

@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Tiny CLI for the FluxOS backend (needs curl and jq).
+#   flux say "<request>"     send a natural-language request to the AI orchestrator
+#   flux answer <id> "<a>"   answer a clarifying question from the last request
+#   flux status              current generation and theme
+#   flux pending             plans waiting for approval
+#   flux show <plan-id>      changes, tier and issues of a plan
+#   flux approve <plan-id>   approve and apply a plan as the device owner
+#   flux reject <plan-id>    reject a plan
+#   flux undo [generation]   roll back (default: previous generation)
+#   flux generations         generation history
+#   flux audit [n]           last n audit entries
+#   flux verify              verify the audit hash chain
+#   flux boot                boot stages
+#   flux reboot              activate a staged generation (simulated on the sandbox target)
+set -euo pipefail
+
+STATE="${FLUX_STATE_DIR:-$(cd "$(dirname "$0")/.." && pwd)/.flux-state}"
+FLUXD="${FLUXD_URL:-http://127.0.0.1:7700}"
+AGENT="${FLUX_AGENT_URL:-http://127.0.0.1:7701}"
+ADMIN="$(cat "$STATE/secrets/admin.token" 2>/dev/null || true)"
+INTENT="$(cat "$STATE/secrets/intent.token" 2>/dev/null || true)"
+SESSION_FILE="$STATE/.cli-session"
+
+api() { curl -sS -H "authorization: Bearer $ADMIN" -H 'content-type: application/json' "$@"; }
+
+case "${1:-help}" in
+  say)
+    shift
+    session="$(cat "$SESSION_FILE" 2>/dev/null || true)"
+    body="$(jq -nc --arg p "$*" --arg s "$session" '{prompt:$p} + (if $s == "" then {} else {session_id:$s} end)')"
+    out="$(curl -sS -X POST "$AGENT/v1/intents" -H "authorization: Bearer $INTENT" -H 'content-type: application/json' -d "$body")"
+    echo "$out" | jq -r '.session_id // empty' > "$SESSION_FILE"
+    echo "$out" | jq -r '
+      "[\(.status)] via \(.engine.kind)\(if .engine.provider then " (\(.engine.provider)/\(.engine.model))" else "" end)",
+      .message,
+      (if .questions then (.questions[] | "  ? \(.question)" + (if .options then "\n    options: " + (.options | join(" | ")) else "" end) + "\n    answer with: flux answer \(.id) \"...\"") else empty end),
+      (if .status == "awaiting_approval" then "  approve with: scripts/flux approve \(.plan.id)" else empty end)'
+    ;;
+  answer)
+    session="$(cat "$SESSION_FILE")"
+    prompt="$(curl -sS -H "authorization: Bearer $INTENT" "$AGENT/v1/sessions/$session" | jq -r '.pending.prompt')"
+    body="$(jq -nc --arg p "$prompt" --arg s "$session" --arg k "$2" --arg v "$3" '{prompt:$p, session_id:$s, answers:{($k):$v}}')"
+    curl -sS -X POST "$AGENT/v1/intents" -H "authorization: Bearer $INTENT" -H 'content-type: application/json' -d "$body" \
+      | jq -r '"[\(.status)] \(.message)", (if .status == "awaiting_approval" then "  approve with: scripts/flux approve \(.plan.id)" else empty end)'
+    ;;
+  status) api "$FLUXD/v1/system" | jq '{generation, status, theme_name, mode, desktop: .spec.desktop.environment, style: .spec.desktop.style, kernel: .spec.kernel.variant, scheduler: .spec.kernel.sched_ext, pending_approvals, degraded}' ;;
+  pending) api "$FLUXD/v1/plans?status=proposed&limit=20" | jq -r '.plans[] | select(.decision != "auto_apply") | "\(.id)  tier \(.evaluation.tier)  \(.intent.prompt // "-")\n    \(.change_summary | split("\n") | .[0:3] | join("\n    "))"' ;;
+  show) api "$FLUXD/v1/plans/$2" | jq '{id, status, decision, tier: .evaluation.tier, requires_reboot: .evaluation.requires_reboot, prompt: .intent.prompt, ai_summary, changes: [.evaluation.changes[] | "[T\(.tier)] \(.summary)"], issues: .evaluation.issues, result}' ;;
+  approve)
+    hash="$(api "$FLUXD/v1/plans/$2" | jq -r .plan_hash)"
+    api -X POST "$FLUXD/v1/plans/$2/approve" -d "{\"plan_hash\":\"$hash\"}" | jq -r 'if .error then "error: \(.error.message)" else "[\(.status)] \(.result.message // "")\n\(.change_summary)" end'
+    ;;
+  reject) api -X POST "$FLUXD/v1/plans/$2/reject" -d '{}' | jq -r '.status // .error.message' ;;
+  undo)
+    body="$( [ -n "${2:-}" ] && echo "{\"to\":$2}" || echo '{}')"
+    api -X POST "$FLUXD/v1/rollback" -d "$body" | jq -r 'if .error then "error: \(.error.message)" else "[\(.status)] \(.result.message // .change_summary)" end'
+    ;;
+  generations) api "$FLUXD/v1/generations" | jq -r '.generations[] | "\(.number)\t\(.status)\t\(.theme_name)\t\(.summary[0:90])"' ;;
+  audit) api "$FLUXD/v1/audit?limit=${2:-20}" | jq -r '.entries | reverse | .[] | "#\(.seq) \(.ts[11:19]) \(.kind) [\(.actor)] \(.summary[0:100])"' ;;
+  verify) api "$FLUXD/v1/audit/verify" | jq . ;;
+  boot) curl -sS "$FLUXD/v1/boot" | jq -r '.stages[] | "\(if .status == "ok" then "✓" elif .status == "warn" then "!" else "✗" end) \(.title): \(.detail)"' ;;
+  reboot) api -X POST "$FLUXD/v1/system/reboot" -d '{}' | jq . ;;
+  *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac

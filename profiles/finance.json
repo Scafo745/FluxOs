@@ -1,0 +1,38 @@
+{
+  "id": "finance",
+  "name": "Trading Desk",
+  "version": "0.1.0",
+  "vertical": "finance",
+  "status": "preview",
+  "compliance_review_required": true,
+  "summary": "Low-latency kernel, precise time sync, locked-down endpoint and a calm multi-monitor layout.",
+  "description": "Preview: compliance rules (securities regulators, record keeping) must be defined by the customer's compliance team before production use. Zen kernel, performance governor, busy polling, chrony, USB storage blocked, five-minute auto-lock. Pair with a policy.json freeze window for trading hours.",
+  "tags": ["finance", "trading", "bank", "low-latency", "compliance", "audit", "markets"],
+  "integrations": ["Browser-based trading and charting platforms", "chrony precise time sync", "Change freeze windows for trading hours"],
+  "style": "classic-panel",
+  "palette": { "accent": "#4c9aff", "secondary": "#36c5a0", "scheme": "dark" },
+  "overlay": {
+    "kernel": {
+      "variant": "low-latency",
+      "cpu_governor": "performance",
+      "io_scheduler": "none",
+      "sysctl": {
+        "vm.swappiness": 1,
+        "kernel.numa_balancing": 0,
+        "net.core.busy_poll": 50,
+        "net.core.busy_read": 50,
+        "net.ipv4.tcp_slow_start_after_idle": 0
+      }
+    },
+    "packages": { "system": ["chromium", "firefox", "keepassxc", "libreoffice"], "flatpak": [] },
+    "services": { "enabled": ["chrony", "fwupd"] },
+    "security": { "usb_storage": "block", "screen_lock": { "enabled": true, "idle_minutes": 5 } },
+    "desktop": { "workspaces": 4, "wallpaper": { "style": "gradient", "seed": 5 } },
+    "design": {
+      "theme_name": "Calm Ledger",
+      "tokens": {
+        "typography": { "font_sans": "Source Sans 3", "font_display": "Source Sans 3", "font_mono": "JetBrains Mono" }
+      }
+    }
+  }
+}
