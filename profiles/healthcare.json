@@ -1,0 +1,30 @@
+{
+  "id": "healthcare",
+  "name": "Clinical Workstation",
+  "version": "0.1.0",
+  "vertical": "healthcare",
+  "status": "preview",
+  "compliance_review_required": true,
+  "summary": "Accessible large-text design, badge readers, two-minute auto-lock and no local patient data.",
+  "description": "Preview: HIPAA and local requirements must be defined by the customer's compliance team before production use. Browser-based EHR access, Remmina for secure remote desktop, PC/SC smart card support, USB storage blocked, shared account wiped on every boot, AAA-contrast large-text theme.",
+  "tags": ["healthcare", "hospital", "clinic", "accessibility", "badge", "kiosk", "nurse", "ehr"],
+  "integrations": ["Browser-based EHR access", "Secure remote desktop (Remmina)", "Smart card and badge readers (pcscd)"],
+  "style": "focus",
+  "palette": { "accent": "#0b6bcb", "secondary": "#0f9d8a", "scheme": "light", "contrast": "high" },
+  "overlay": {
+    "packages": { "system": ["firefox", "chromium", "remmina"], "flatpak": [] },
+    "services": { "enabled": ["smartcard", "chrony", "fwupd"] },
+    "security": { "usb_storage": "block", "screen_lock": { "enabled": true, "idle_minutes": 2 } },
+    "session": { "ephemeral_home": true },
+    "accessibility": { "large_text": true, "text_scale": 1.25, "high_contrast": true },
+    "desktop": { "environment": "gnome", "wallpaper": { "style": "solid", "seed": 1 } },
+    "design": {
+      "theme_name": "Clear Ward",
+      "tokens": {
+        "typography": { "font_sans": "Atkinson Hyperlegible Next", "font_display": "Atkinson Hyperlegible Next", "font_mono": "JetBrains Mono", "base_size_px": 16 },
+        "motion": { "animation_scale": 0.5 }
+      },
+      "icon_theme": "Papirus-Light"
+    }
+  }
+}

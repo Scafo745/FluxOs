@@ -1,0 +1,43 @@
+{
+  "id": "gaming",
+  "name": "Gaming Rig",
+  "version": "1.0.0",
+  "vertical": "gaming",
+  "summary": "Low-latency kernel and sched_ext scheduler, Steam with Proton, controllers and a bold neon theme.",
+  "description": "Zen kernel, scx_lavd scheduler, performance governor, GameMode, Gamescope, Steam, Lutris, Heroic, Wine and MangoHud. High vm.max_map_count for modern titles and split-lock mitigation off.",
+  "tags": ["gaming", "games", "steam", "proton", "low-latency", "performance", "controllers", "fps"],
+  "integrations": ["Steam with Proton", "Lutris and Heroic launchers", "MangoHud performance overlay"],
+  "style": "snap-layouts",
+  "palette": { "accent": "#00e5ff", "secondary": "#ff2e97", "scheme": "dark", "contrast": "normal" },
+  "overlay": {
+    "boot": { "splash_theme": "circle_hud", "loader_timeout_s": 2 },
+    "kernel": {
+      "variant": "low-latency",
+      "sysctl": {
+        "vm.max_map_count": 2147483642,
+        "vm.swappiness": 10,
+        "kernel.split_lock_mitigate": 0,
+        "net.core.default_qdisc": "fq",
+        "net.ipv4.tcp_congestion_control": "bbr"
+      },
+      "cpu_governor": "performance",
+      "sched_ext": "lavd"
+    },
+    "drivers": { "gaming_controllers": true },
+    "packages": {
+      "system": ["steam", "gamescope", "lutris", "heroic", "protonup-qt", "mangohud", "goverlay", "wine", "winetricks", "firefox", "btop"],
+      "flatpak": ["discord", "obs-studio"]
+    },
+    "services": { "enabled": ["flatpak", "fwupd", "gamemode", "bluetooth"] },
+    "desktop": { "wallpaper": { "style": "grid", "seed": 42 } },
+    "design": {
+      "theme_name": "Neon Arcade",
+      "tokens": {
+        "typography": { "font_sans": "Rubik", "font_display": "Orbitron", "font_mono": "JetBrains Mono", "weight_bold": 700 },
+        "effects": { "shadow_opacity": 0.5 }
+      },
+      "icon_theme": "Papirus-Dark",
+      "cursor_theme": "Bibata-Modern-Ice"
+    }
+  }
+}
