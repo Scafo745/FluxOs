@@ -1,14 +1,15 @@
 import { Package, Search, Sparkles, Trash } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { APPS, DOCK_APPS, TINT_BG } from "../apps/meta";
+import { APPS, LAUNCHER_APPS, TINT_BG } from "../apps/meta";
 import { Button, Chip, TierBadge } from "../components/ui";
-import { category, hueGradient, installedApps, type InstalledApp } from "../lib/apps";
+import { category, hueGradient, installedApps, type InstalledApp, xdgCategory } from "../lib/apps";
 import type { Spec } from "../lib/types";
 import { errorText, reportPlan } from "../state/actions";
 import { useAssistant } from "../state/assistant";
 import { useShell } from "../state/shell";
 import { useSystem } from "../state/system";
+import { useUser } from "../state/user";
 
 function Tile({ label, sub, background, icon: Icon, onClick, active }: { label: string; sub?: string; background: string; icon: typeof Package; onClick: () => void; active?: boolean }) {
   return (
@@ -37,12 +38,18 @@ export function Launcher({ spec }: { spec: Spec }) {
   const [selected, setSelected] = useState<InstalledApp | null>(null);
   const [busy, setBusy] = useState(false);
   const apps = useMemo(() => installedApps(spec, catalog), [spec, catalog]);
+  const desktopApps = useUser((s) => s.apps);
+  const userInfo = useUser((s) => s.info);
+  useEffect(() => {
+    if (open) void useUser.getState().refresh();
+  }, [open]);
   if (!open) return null;
 
   const match = (s: string) => s.toLowerCase().includes(q.trim().toLowerCase());
   const shown = apps.filter((a) => !q || match(a.name) || match(a.id) || match(a.category));
-  const system = DOCK_APPS.filter((id) => !q || match(APPS[id].title));
+  const system = LAUNCHER_APPS.filter((id) => !q || match(APPS[id].title));
   const services = spec.services.enabled.filter((s) => !q || match(s));
+  const runnable = (desktopApps ?? []).filter((a) => !a.terminal && (!q || match(a.name) || match(a.id) || match(a.generic ?? "")));
 
   async function remove(app: InstalledApp) {
     setBusy(true);
@@ -80,7 +87,31 @@ export function Launcher({ spec }: { spec: Spec }) {
             </>
           )}
 
-          <p className="mt-6 mb-2 px-3 text-xs font-semibold tracking-[0.14em] text-muted uppercase">Installed on this system ({shown.length})</p>
+          {runnable.length > 0 && (
+            <>
+              <p className="mt-6 mb-2 px-3 text-xs font-semibold tracking-[0.14em] text-muted uppercase">Applications ({runnable.length})</p>
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-1">
+                {runnable.map((a) => {
+                  const cat = category(xdgCategory(a.categories));
+                  return (
+                    <Tile
+                      key={a.id}
+                      label={a.name}
+                      sub={a.generic ?? cat.label}
+                      background={hueGradient(cat.hue)}
+                      icon={cat.icon}
+                      onClick={() => void useUser.getState().launch(a)}
+                    />
+                  );
+                })}
+              </div>
+            </>
+          )}
+          {userInfo && !userInfo.available && (
+            <p className="mt-6 px-3 text-xs text-muted">Apps on this machine can't be started from here: {userInfo.reason}</p>
+          )}
+
+          <p className="mt-6 mb-2 px-3 text-xs font-semibold tracking-[0.14em] text-muted uppercase">Managed by FluxOS ({shown.length})</p>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-1">
             {shown.map((a) => {
               const cat = category(a.category);

@@ -290,10 +290,27 @@ pub struct SessionSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum DesktopEnv {
+    /// The FluxOS shell: the web desktop served by fluxd, full screen in the
+    /// cage compositor. Its layout follows the `desktop` section directly.
+    Fluxos,
+    /// KDE Plasma 6.
     Plasma,
     Gnome,
+    /// Hyprland tiling compositor.
     Hyprland,
     Cosmic,
+}
+
+impl DesktopEnv {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fluxos => "FluxOS shell",
+            Self::Plasma => "KDE Plasma",
+            Self::Gnome => "GNOME",
+            Self::Hyprland => "Hyprland",
+            Self::Cosmic => "COSMIC",
+        }
+    }
 }
 
 /// Original look-and-behavior presets with neutral names (PRD 7.3).
@@ -465,7 +482,7 @@ impl Default for SystemSpec {
             },
             session: SessionSpec { mode: SessionMode::Standard, kiosk_url: None, ephemeral_home: false },
             desktop: DesktopSpec {
-                environment: DesktopEnv::Plasma,
+                environment: DesktopEnv::Fluxos,
                 style: StylePreset::GlassDock,
                 dock: DockSpec {
                     enabled: true,

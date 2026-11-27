@@ -141,6 +141,28 @@ export async function restart(): Promise<void> {
   }
 }
 
+/** Restart or shut down after a confirmation. */
+export function power(kind: "restart" | "shutdown"): void {
+  const shell = useShell.getState();
+  shell.show(null);
+  shell.ask({
+    title: kind === "restart" ? "Restart FluxOS?" : "Shut down FluxOS?",
+    body:
+      kind === "restart"
+        ? "Open apps close. The current generation starts again; a staged generation becomes active."
+        : "Open apps close and the machine turns off.",
+    changes: [],
+    confirmLabel: kind === "restart" ? "Restart" : "Shut down",
+    onConfirm: async () => {
+      if (kind === "restart") await api.reboot();
+      else {
+        await api.poweroff();
+        shell.toast({ tone: "info", title: "Shutting down", body: "FluxOS is turning the machine off.", ttl: 0 });
+      }
+    },
+  });
+}
+
 /** Tier 0-1 tweak from quick settings; the theme change itself is the feedback. */
 export async function quick(label: string, ops: PlanRecord["operations"]): Promise<void> {
   try {

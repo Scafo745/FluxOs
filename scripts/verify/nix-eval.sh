@@ -28,12 +28,12 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/flux-nix-eval.XXXXXX")
 # eval_module <label> <path to generated.nix>
 eval_module() {
   local out
-  out=$(nixc eval --impure --json --expr "let r = import $ROOT/scripts/verify/eval.nix { module = $2; nixpkgs = $PKGS_EXPR; }; in { inherit (r) drv kernel scx; warnings = r.warnings; }" 2>"$WORK/$1.err")
+  out=$(nixc eval --impure --json --expr "let r = import $ROOT/scripts/verify/eval.nix { module = $2; nixpkgs = $PKGS_EXPR; root = $ROOT; }; in { inherit (r) drv kernel scx session; warnings = r.warnings; }" 2>"$WORK/$1.err")
   if [ -z "$out" ]; then
     check "$1 evaluates" "$(grep -m1 'error:' -A3 "$WORK/$1.err" | tr '\n' ' ')" "a system derivation"
     return
   fi
-  check_match "$1 evaluates ($(echo "$out" | jq -r '"kernel \(.kernel), scheduler \(.scx)"'))" "$(echo "$out" | jq -r .drv)" '^/nix/store/.*-nixos-system-.*\.drv$'
+  check_match "$1 evaluates ($(echo "$out" | jq -r '"kernel \(.kernel), scheduler \(.scx), \(.session)"'))" "$(echo "$out" | jq -r .drv)" '^/nix/store/.*-nixos-system-.*\.drv$'
   check "$1 has no NixOS warnings" "$(echo "$out" | jq '.warnings | length')" 0
 }
 
@@ -71,14 +71,31 @@ stop "$FLUXD_PID"
 
 section "Flake (nixpkgs pinned by flake.lock)"
 for attr in packages.x86_64-linux.fluxd packages.x86_64-linux.flux-agent packages.x86_64-linux.flux-ui \
+  packages.x86_64-linux.appliance-ova \
+  nixosConfigurations.fluxos-appliance.config.system.build.toplevel \
   nixosConfigurations.fluxos-vm.config.system.build.toplevel nixosConfigurations.fluxos-vm.config.system.build.vm; do
   out=$(nixc eval --raw "$FLAKE#$attr.drvPath" 2>"$WORK/flake.err")
   check_match "$attr evaluates" "${out:-$(grep -m1 'error:' "$WORK/flake.err")}" '^/nix/store/.*\.drv$'
 done
-check "fluxos-vm has no NixOS warnings" "$(nixc eval --json "$FLAKE#nixosConfigurations.fluxos-vm.config.warnings" 2>/dev/null | jq length)" 0
-VM="$FLAKE#nixosConfigurations.fluxos-vm.config"
-check_match "fluxos-vm: fluxd serves the UI package" "$(nixc eval --raw "$VM.systemd.services.fluxd.serviceConfig.ExecStart" 2>&1)" '--ui-dir /nix/store/[a-z0-9]+-flux-ui-0\.1\.0( |$)'
-check_match "fluxos-vm: agent accepts the UI origin" "$(nixc eval --raw "$VM.systemd.services.flux-agent.environment.FLUX_CORS_ORIGINS" 2>&1)" '(^|,)http://127\.0\.0\.1:7700(,|$)'
-check "fluxos-vm: UI opens at login" "$(nixc eval --raw "$VM.environment.etc.\"xdg/autostart/fluxos.desktop\".text" 2>/dev/null | grep -c '^Exec=/nix/store/.*-fluxos-open-ui$')" 1
+for host in fluxos-appliance fluxos-vm; do
+  check "$host has no NixOS warnings" "$(nixc eval --json "$FLAKE#nixosConfigurations.$host.config.warnings" 2>/dev/null | jq length)" 0
+done
+VM="$FLAKE#nixosConfigurations.fluxos-appliance.config"
+opt() { # <option path> : its value as text (store paths without their string context)
+  # No eval cache: Nix 2.31 trips over cached strings with derivation context.
+  nixc eval --no-eval-cache --raw "$VM.$1" --apply 'v: builtins.unsafeDiscardStringContext (if builtins.isString v || builtins.isPath v || v ? outPath then toString v else builtins.toJSON v)' 2>&1 | grep -v '^warning:'
+}
+check_match "appliance: fluxd serves the UI package" "$(opt systemd.services.fluxd.serviceConfig.ExecStart)" '--ui-dir /nix/store/[a-z0-9]+-flux-ui-0\.1\.0( |$)'
+check_match "appliance: fluxd rebuilds its own configuration" "$(opt systemd.services.fluxd.serviceConfig.ExecStart)" '--nixos-flake path:/etc/nixos#fluxos-appliance( |$)'
+check_match "appliance: agent accepts the UI origin" "$(opt systemd.services.flux-agent.environment.FLUX_CORS_ORIGINS)" '(^|,)http://127\.0\.0\.1:7700(,|$)'
+check "appliance: the FluxOS shell runs as flux" "$(opt services.cage.user)" flux
+check_match "appliance: the shell is a full-screen browser on the UI" "$(opt services.cage.program)" '^/nix/store/[a-z0-9]+-fluxos-shell$'
+check "appliance: the console screen is paired automatically" "$(opt systemd.paths.fluxos-console-pairing.pathConfig.PathChanged)" /var/lib/fluxos/secrets/pairing.code
+check "appliance: fluxd adopts the image's spec" "$(opt '"environment"."etc"."fluxos-image/spec.json".enable')" true
+check "appliance: /etc/fluxos is the live theme directory" "$(opt environment.etc.fluxos.source)" /run/fluxos/current/fluxos
+check "appliance: guest support for VirtualBox and VMware" "$(opt virtualisation.virtualbox.guest.enable)/$(opt virtualisation.vmware.guest.enable)" "true/true"
+check "appliance: the self-test only runs with its credential" "$(opt systemd.services.fluxos-selftest.unitConfig.ConditionCredential)" fluxos.selftest
+check_match "appliance: fluxd relays to flux's session" "$(opt systemd.services.fluxd.serviceConfig.ExecStart)" '--console-user flux( |$)'
+check "appliance: flux-session runs in flux's user manager only" "$(opt systemd.user.services.flux-session.unitConfig.ConditionUser)" flux
 
 summary

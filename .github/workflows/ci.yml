@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
+      - name: Rust format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build fluxd and flux-session
+        run: cargo build -p fluxd -p flux-session
+      - name: Agent
+        working-directory: agent
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: UI type check and build
+        working-directory: ui
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Daemon checks (scripts/verify/daemon.sh)
+        run: scripts/verify/daemon.sh
+      - name: Agent checks (scripts/verify/agent.sh)
+        run: scripts/verify/agent.sh

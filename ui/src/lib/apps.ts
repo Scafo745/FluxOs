@@ -19,7 +19,7 @@ import {
   Video,
 } from "lucide-react";
 
-import type { Catalog, Spec } from "./types";
+import type { Catalog, DesktopApp, Spec } from "./types";
 
 export const CATEGORY: Record<string, { label: string; icon: LucideIcon; hue: number }> = {
   gaming: { label: "Games", icon: Gamepad2, hue: 188 },
@@ -69,6 +69,38 @@ export function installedApps(spec: Spec, catalog: Catalog | null): InstalledApp
   spec.packages.flatpak.forEach((id) => add(id, "flatpak"));
   spec.packages.system.forEach((id) => add(id, "system"));
   return out;
+}
+
+/**
+ * The desktop entry that starts an app from the spec: same id (firefox),
+ * a reverse-DNS id ending in it (org.mozilla.firefox), or the same name.
+ */
+export function desktopEntryFor(app: Pick<InstalledApp, "id" | "name">, entries: DesktopApp[] | null): DesktopApp | undefined {
+  if (!entries) return undefined;
+  const id = app.id.toLowerCase();
+  const name = app.name.toLowerCase();
+  const runnable = entries.filter((e) => !e.terminal);
+  return (
+    runnable.find((e) => e.id.toLowerCase() === id) ??
+    runnable.find((e) => e.id.toLowerCase().endsWith(`.${id}`)) ??
+    runnable.find((e) => e.name.toLowerCase() === name)
+  );
+}
+
+/** Our category for an XDG desktop entry's Categories list. */
+export function xdgCategory(categories: string[]): string {
+  const has = (c: string) => categories.includes(c);
+  if (has("Game")) return "gaming";
+  if (has("WebBrowser") || has("Network") && !has("InstantMessaging")) return "web";
+  if (has("InstantMessaging") || has("Chat")) return "social";
+  if (has("Development") || has("IDE")) return "dev";
+  if (has("Office")) return "office";
+  if (has("Graphics")) return "creative";
+  if (has("AudioVideo") || has("Audio") || has("Video")) return "media";
+  if (has("Education") || has("Science")) return "education";
+  if (has("Security")) return "security";
+  if (has("System") || has("Settings") || has("Monitor")) return "system";
+  return "desktop";
 }
 
 export function hueGradient(hue: number): string {

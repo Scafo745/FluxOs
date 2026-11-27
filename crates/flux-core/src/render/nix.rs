@@ -10,7 +10,6 @@ use std::fmt::Write;
 use crate::catalog::{self, NixInstall};
 use crate::spec::*;
 
-use super::Assets;
 use super::theme::{Dconf, gnome_dconf};
 
 /// Nix double-quoted string literal.
@@ -97,30 +96,39 @@ pub struct NixContext<'a> {
     pub header: &'a str,
 }
 
-pub fn module(spec: &SystemSpec, assets: &Assets, ctx: &NixContext<'_>) -> String {
+/// Line that names the FluxOS generation in the boot menu. It is the only
+/// line besides comments that changes when nothing but live files change.
+const TAG_LINE: &str = "  system.nixos.tags = ";
+
+/// The module with comments and the generation tag removed. Two generations
+/// whose normalized modules are equal differ only in live files, so the
+/// NixOS target can switch them without running `nixos-rebuild`.
+pub fn normalize_module(module: &str) -> String {
+    module
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#') && !l.starts_with(TAG_LINE))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub fn module(spec: &SystemSpec, ctx: &NixContext<'_>) -> String {
     let mut s = String::new();
     let kernel = catalog::kernel(spec.kernel.variant);
     let kiosk = matches!(spec.session.mode, SessionMode::Kiosk | SessionMode::Exam);
+    let env = spec.desktop.environment;
     let gen_tag = format!("fluxos-gen-{}", ctx.generation);
+    let live = super::LIVE_DIR;
 
     let _ = writeln!(s, "# {}", ctx.header);
     let _ =
         writeln!(s, "# DO NOT EDIT. fluxd rewrites this file for every generation; change the system through FluxOS.");
+    let _ =
+        writeln!(s, "# Theme and desktop config files are not in here: they are live files under {live}, which fluxd");
+    let _ = writeln!(s, "# points at the active generation, so design changes apply without a rebuild.");
     let _ = writeln!(s, "{{ config, lib, pkgs, ... }}:");
     let _ = writeln!(s);
-    let _ = writeln!(s, "let");
-    // Theme assets packaged so desktops find them under /run/current-system/sw/share.
-    let _ = writeln!(
-        s,
-        "  fluxosColorScheme = pkgs.writeTextDir \"share/color-schemes/FluxOS.colors\" {};",
-        ind(&assets.kde_scheme, "  ")
-    );
-    let _ = writeln!(
-        s,
-        "  fluxosPlasmaLayout = pkgs.writeTextDir \"share/plasma/shells/org.kde.plasma.desktop/contents/updates/fluxos-layout-{gen_tag}.js\" {};",
-        ind(&assets.plasma_layout, "  ")
-    );
     if kiosk && let Some(url) = &spec.session.kiosk_url {
+        let _ = writeln!(s, "let");
         let _ = writeln!(s, "  fluxosKiosk = pkgs.writeShellScript \"fluxos-kiosk\" ''");
         let _ = writeln!(
             s,
@@ -128,8 +136,8 @@ pub fn module(spec: &SystemSpec, assets: &Assets, ctx: &NixContext<'_>) -> Strin
             q(url)
         );
         let _ = writeln!(s, "  '';");
+        let _ = writeln!(s, "in");
     }
-    let _ = writeln!(s, "in");
     let _ = writeln!(s, "{{");
 
     // ---- base
@@ -249,7 +257,17 @@ pub fn module(spec: &SystemSpec, assets: &Assets, ctx: &NixContext<'_>) -> Strin
             );
         }
     } else {
-        match spec.desktop.environment {
+        match env {
+            DesktopEnv::Fluxos => {
+                // The FluxOS NixOS module runs the shell (cage + browser) as the console user.
+                let _ = writeln!(s, "  services.fluxos.shell.enable = true;");
+                if spec.services.enabled.contains("flatpak") {
+                    let _ = writeln!(
+                        s,
+                        "  xdg.portal = {{ enable = true; extraPortals = [ pkgs.xdg-desktop-portal-gtk ]; config.common.default = \"gtk\"; }};"
+                    );
+                }
+            }
             DesktopEnv::Plasma => {
                 let _ = writeln!(s, "  services.desktopManager.plasma6.enable = true;");
                 let _ = writeln!(s, "  services.displayManager.sddm = {{ enable = true; wayland.enable = true; }};");
@@ -282,7 +300,7 @@ pub fn module(spec: &SystemSpec, assets: &Assets, ctx: &NixContext<'_>) -> Strin
 
     // ---- packages
     let _ = writeln!(s, "  # Packages");
-    let mut sys_pkgs: Vec<String> = vec!["fluxosColorScheme".into(), "fluxosPlasmaLayout".into()];
+    let mut sys_pkgs: Vec<String> = Vec::new();
     let mut module_lines: Vec<&str> = Vec::new();
     for id in &spec.packages.system {
         let Some(p) = catalog::package(id) else { continue };
@@ -299,7 +317,7 @@ pub fn module(spec: &SystemSpec, assets: &Assets, ctx: &NixContext<'_>) -> Strin
     if let Some(cursor) = catalog::cursor_theme(&spec.design.cursor_theme) {
         sys_pkgs.push(pkg_expr(cursor.nix));
     }
-    if !kiosk && spec.desktop.environment == DesktopEnv::Gnome {
+    if !kiosk && env == DesktopEnv::Gnome {
         sys_pkgs.push("pkgs.gnomeExtensions.appindicator".into());
         if spec.desktop.dock.enabled {
             sys_pkgs.push("pkgs.gnomeExtensions.dash-to-dock".into());
@@ -311,7 +329,7 @@ pub fn module(spec: &SystemSpec, assets: &Assets, ctx: &NixContext<'_>) -> Strin
             sys_pkgs.push("pkgs.gnomeExtensions.forge".into());
         }
     }
-    if !kiosk && spec.desktop.environment == DesktopEnv::Plasma {
+    if !kiosk && env == DesktopEnv::Plasma {
         if spec.desktop.windows.tiling {
             sys_pkgs.push("pkgs.kdePackages.krohnkite".into());
         } else if spec.desktop.windows.snapping {
@@ -319,12 +337,15 @@ pub fn module(spec: &SystemSpec, assets: &Assets, ctx: &NixContext<'_>) -> Strin
         }
     }
     sys_pkgs.dedup();
-    let _ = writeln!(s, "  environment.systemPackages = [");
-    for p in &sys_pkgs {
-        let _ = writeln!(s, "    {p}");
+    if sys_pkgs.is_empty() {
+        let _ = writeln!(s, "  environment.systemPackages = [ ];");
+    } else {
+        let _ = writeln!(s, "  environment.systemPackages = [");
+        for p in &sys_pkgs {
+            let _ = writeln!(s, "    {p}");
+        }
+        let _ = writeln!(s, "  ];");
     }
-    let _ = writeln!(s, "  ];");
-    let _ = writeln!(s, "  environment.pathsToLink = [ \"/share/color-schemes\" \"/share/plasma\" ];");
     for m in module_lines {
         let _ = writeln!(s, "  {m}");
     }
@@ -398,7 +419,7 @@ pub fn module(spec: &SystemSpec, assets: &Assets, ctx: &NixContext<'_>) -> Strin
     font_pkgs.push("noto-fonts-color-emoji");
     font_pkgs.sort();
     font_pkgs.dedup();
-    let _ = writeln!(s, "  # Design ({})", spec.design.theme_name);
+    let _ = writeln!(s, "  # Design: fonts, icons and cursors are packages; colors, motion and layout are live files.");
     let _ = writeln!(s, "  fonts.packages = {};", list(font_pkgs.iter().map(|p| pkg_expr(p))));
     let _ = writeln!(
         s,
@@ -406,34 +427,24 @@ pub fn module(spec: &SystemSpec, assets: &Assets, ctx: &NixContext<'_>) -> Strin
         q(&ty.font_sans),
         q(&ty.font_mono)
     );
-    let etc = |s: &mut String, path: &str, content: &str| {
-        let _ = writeln!(s, "  environment.etc.{}.text = {};", q(path), ind(content, "  "));
+    let link = |s: &mut String, etc_path: &str| {
+        let target = super::live_path(&format!("etc/{etc_path}")).unwrap_or_else(|| etc_path.to_string());
+        let _ = writeln!(s, "  environment.etc.{}.source = {};", q(etc_path), q(&format!("{live}/{target}")));
     };
-    etc(&mut s, "fluxos/spec.json", &assets.spec_json);
-    etc(&mut s, "fluxos/tokens.json", &assets.tokens_json);
-    etc(&mut s, "fluxos/theme.css", &assets.theme_css);
-    etc(&mut s, "fluxos/wallpaper.svg", &assets.wallpaper_svg);
-    etc(&mut s, "fluxos/gtk-3.0.css", &assets.gtk_css);
-    etc(&mut s, "fluxos/gtk-4.0.css", &assets.gtk_css);
-    etc(&mut s, "xdg/gtk-3.0/settings.ini", &assets.gtk_settings);
-    etc(&mut s, "xdg/gtk-4.0/settings.ini", &assets.gtk_settings);
-    let _ = writeln!(s, "  environment.etc.\"fluxos/generation\".text = \"{}\\n\";", ctx.generation);
+    link(&mut s, "fluxos");
+    link(&mut s, "xdg/gtk-3.0/settings.ini");
+    link(&mut s, "xdg/gtk-4.0/settings.ini");
+    let _ = writeln!(s, "  environment.sessionVariables.XDG_DATA_DIRS = [ {} ];", q(&format!("{live}/share")));
     let _ = writeln!(s, "  systemd.user.tmpfiles.rules = [");
     let _ = writeln!(s, "    \"L %h/.config/gtk-4.0/gtk.css - - - - /etc/fluxos/gtk-4.0.css\"");
     let _ = writeln!(s, "    \"L %h/.config/gtk-3.0/gtk.css - - - - /etc/fluxos/gtk-3.0.css\"");
     let _ = writeln!(s, "  ];");
     if !kiosk {
-        match spec.desktop.environment {
+        match env {
             DesktopEnv::Plasma => {
-                etc(&mut s, "xdg/kdeglobals", &assets.kdeglobals);
-                etc(&mut s, "xdg/kwinrc", &assets.kwinrc);
-                let cursor = format!("[Mouse]\ncursorTheme={}\n", spec.design.cursor_theme);
-                etc(&mut s, "xdg/kcminputrc", &cursor);
-                let lock = format!(
-                    "[Daemon]\nAutolock={}\nTimeout={}\nLockOnResume=true\n",
-                    sec.screen_lock.enabled, sec.screen_lock.idle_minutes
-                );
-                etc(&mut s, "xdg/kscreenlockerrc", &lock);
+                for f in ["xdg/kdeglobals", "xdg/kwinrc", "xdg/kcminputrc", "xdg/kscreenlockerrc"] {
+                    link(&mut s, f);
+                }
             }
             DesktopEnv::Gnome => {
                 let _ = writeln!(s, "  programs.dconf.profiles.user.databases = [");
@@ -450,10 +461,8 @@ pub fn module(spec: &SystemSpec, assets: &Assets, ctx: &NixContext<'_>) -> Strin
                 let _ = writeln!(s, "    }}");
                 let _ = writeln!(s, "  ];");
             }
-            DesktopEnv::Hyprland => {
-                etc(&mut s, "xdg/hypr/fluxos.conf", &assets.hyprland);
-            }
-            DesktopEnv::Cosmic => {}
+            DesktopEnv::Hyprland => link(&mut s, "xdg/hypr/fluxos.conf"),
+            DesktopEnv::Cosmic | DesktopEnv::Fluxos => {}
         }
     }
     let _ = writeln!(s);

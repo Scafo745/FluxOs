@@ -1,0 +1,18 @@
+[package]
+name = "flux-session"
+description = "FluxOS user-session service: terminal, files, processes and apps for the FluxOS UI, as the logged-in user"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "flux-session"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow = "1"
+base64 = "0.22"
+libc = "0.2"

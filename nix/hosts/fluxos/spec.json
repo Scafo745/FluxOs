@@ -1,0 +1,149 @@
+{
+  "base": {
+    "distro": "nixos",
+    "release": "26.05",
+    "hostname": "fluxos",
+    "timezone": "UTC",
+    "locale": "en_US.UTF-8"
+  },
+  "boot": {
+    "splash": true,
+    "splash_theme": "hexagon_dots",
+    "loader_timeout_s": 3
+  },
+  "kernel": {
+    "variant": "lts",
+    "sysctl": {},
+    "cpu_governor": "schedutil",
+    "io_scheduler": "auto",
+    "sched_ext": "off"
+  },
+  "drivers": {
+    "gpu": "auto",
+    "gaming_controllers": false
+  },
+  "packages": {
+    "system": [
+      "btop",
+      "firefox",
+      "git"
+    ],
+    "flatpak": []
+  },
+  "services": {
+    "enabled": [
+      "flatpak",
+      "fwupd"
+    ]
+  },
+  "security": {
+    "firewall": {
+      "enabled": true,
+      "allowed_tcp_ports": [],
+      "allowed_udp_ports": []
+    },
+    "mac": "apparmor",
+    "usb_storage": "allow",
+    "screen_lock": {
+      "enabled": true,
+      "idle_minutes": 10
+    },
+    "audit": true
+  },
+  "session": {
+    "mode": "standard",
+    "kiosk_url": null,
+    "ephemeral_home": false
+  },
+  "desktop": {
+    "environment": "fluxos",
+    "style": "glass-dock",
+    "dock": {
+      "enabled": true,
+      "position": "bottom",
+      "autohide": false,
+      "size_px": 52,
+      "floating": true
+    },
+    "panel": {
+      "position": "top",
+      "global_menu": true,
+      "height_px": 28
+    },
+    "windows": {
+      "snapping": true,
+      "tiling": false,
+      "gaps_px": 8,
+      "corner_radius_px": 12,
+      "blur": true
+    },
+    "workspaces": 4,
+    "wallpaper": {
+      "style": "aurora",
+      "seed": 7
+    }
+  },
+  "design": {
+    "theme_name": "Flux Midnight",
+    "tokens": {
+      "scheme": "dark",
+      "palette": {
+        "background": "#0e0c15",
+        "surface": "#161322",
+        "surface_raised": "#1f1b2f",
+        "border": "#332e48",
+        "text": "#f1f0f5",
+        "text_muted": "#aeabba",
+        "accent": "#7c5cff",
+        "accent_text": "#0b0b10",
+        "secondary": "#f5bd3d",
+        "success": "#54d489",
+        "warning": "#f6ae31",
+        "danger": "#e7404e"
+      },
+      "typography": {
+        "font_sans": "Inter",
+        "font_mono": "JetBrains Mono",
+        "font_display": "Inter",
+        "base_size_px": 14,
+        "scale_ratio": 1.25,
+        "line_height": 1.5,
+        "weight_regular": 400,
+        "weight_bold": 650
+      },
+      "shape": {
+        "radius_sm_px": 6,
+        "radius_md_px": 10,
+        "radius_lg_px": 16,
+        "spacing_unit_px": 4,
+        "border_width_px": 1
+      },
+      "motion": {
+        "duration_fast_ms": 120,
+        "duration_base_ms": 220,
+        "duration_slow_ms": 360,
+        "easing": [
+          0.2,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "animation_scale": 1.0
+      },
+      "effects": {
+        "blur_px": 24,
+        "transparency": 0.2,
+        "shadow_opacity": 0.35
+      }
+    },
+    "icon_theme": "Papirus-Dark",
+    "cursor_theme": "Bibata-Modern-Classic"
+  },
+  "accessibility": {
+    "high_contrast": false,
+    "large_text": false,
+    "text_scale": 1.0,
+    "screen_reader": false,
+    "reduce_motion": false
+  }
+}

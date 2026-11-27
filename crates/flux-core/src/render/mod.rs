@@ -33,6 +33,20 @@ impl Artifact {
     }
 }
 
+/// Where the NixOS target keeps the active generation's live files. The
+/// generated module links `/etc/fluxos`, the desktop config files and an
+/// XDG data dir here, so design changes apply without a NixOS rebuild.
+pub const LIVE_DIR: &str = "/run/fluxos/current";
+
+/// Artifact prefixes that are published to [`LIVE_DIR`], and where they land.
+pub const LIVE_PREFIXES: &[(&str, &str)] =
+    &[("etc/fluxos/", "fluxos/"), ("etc/xdg/", "xdg/"), ("usr/share/", "share/")];
+
+/// Location of an artifact inside the live directory, if it is a live file.
+pub fn live_path(artifact_path: &str) -> Option<String> {
+    LIVE_PREFIXES.iter().find_map(|(from, to)| artifact_path.strip_prefix(from).map(|rest| format!("{to}{rest}")))
+}
+
 /// Theme assets shared by every exporter.
 pub struct Assets {
     pub spec_json: String,
@@ -43,6 +57,8 @@ pub struct Assets {
     pub kde_scheme: String,
     pub kdeglobals: String,
     pub kwinrc: String,
+    pub kcminputrc: String,
+    pub kscreenlockerrc: String,
     pub plasma_layout: String,
     pub hyprland: String,
     pub dconf: String,
@@ -78,6 +94,7 @@ pub fn assets(spec: &SystemSpec, ctx: &RenderContext<'_>) -> Assets {
     );
     let a = &spec.accessibility;
     let dtcg = tokens::to_dtcg(&spec.design.tokens, a.effective_text_scale(), a.reduce_motion, &header);
+    let lock = &spec.security.screen_lock;
     Assets {
         spec_json: serde_json::to_string_pretty(spec).unwrap_or_default() + "\n",
         tokens_json: serde_json::to_string_pretty(&dtcg).unwrap_or_default() + "\n",
@@ -87,6 +104,11 @@ pub fn assets(spec: &SystemSpec, ctx: &RenderContext<'_>) -> Assets {
         kde_scheme: theme::kde_scheme_file(spec),
         kdeglobals: theme::kdeglobals(spec),
         kwinrc: theme::kwinrc(spec),
+        kcminputrc: format!("[Mouse]\ncursorTheme={}\n", spec.design.cursor_theme),
+        kscreenlockerrc: format!(
+            "[Daemon]\nAutolock={}\nTimeout={}\nLockOnResume=true\n",
+            lock.enabled, lock.idle_minutes
+        ),
         plasma_layout: theme::plasma_layout_js(spec, &format!("generation {}", ctx.generation)),
         hyprland: theme::hyprland(spec, &header),
         dconf: theme::dconf_keyfile(spec),
@@ -104,19 +126,29 @@ pub fn render_all(spec: &SystemSpec, ctx: &RenderContext<'_>) -> Vec<Artifact> {
         ctx.plan_id.map(|p| format!(", plan {p}")).unwrap_or_default(),
         spec.digest()
     );
-    let module = nix::module(spec, &a, &nix::NixContext { generation: ctx.generation, header: &header });
+    let module = nix::module(spec, &nix::NixContext { generation: ctx.generation, header: &header });
+    // Plasma runs each layout update script once per file name, so every generation gets its own.
+    let layout = format!(
+        "usr/share/plasma/shells/org.kde.plasma.desktop/contents/updates/fluxos-layout-gen-{}.js",
+        ctx.generation
+    );
     vec![
         Artifact::new("etc/nixos/fluxos/generated.nix", module),
         Artifact::new("etc/fluxos/spec.json", a.spec_json.clone()),
+        Artifact::new("etc/fluxos/generation", format!("{}\n", ctx.generation)),
         Artifact::new("etc/fluxos/tokens.json", a.tokens_json.clone()),
         Artifact::new("etc/fluxos/theme.css", a.theme_css.clone()),
         Artifact::new("etc/fluxos/wallpaper.svg", a.wallpaper_svg.clone()),
+        Artifact::new("etc/fluxos/gtk-3.0.css", a.gtk_css.clone()),
         Artifact::new("etc/fluxos/gtk-4.0.css", a.gtk_css.clone()),
+        Artifact::new("etc/xdg/gtk-3.0/settings.ini", a.gtk_settings.clone()),
         Artifact::new("etc/xdg/gtk-4.0/settings.ini", a.gtk_settings.clone()),
         Artifact::new("etc/xdg/kdeglobals", a.kdeglobals.clone()),
         Artifact::new("etc/xdg/kwinrc", a.kwinrc.clone()),
+        Artifact::new("etc/xdg/kcminputrc", a.kcminputrc.clone()),
+        Artifact::new("etc/xdg/kscreenlockerrc", a.kscreenlockerrc.clone()),
         Artifact::new("usr/share/color-schemes/FluxOS.colors", a.kde_scheme.clone()),
-        Artifact::new("usr/share/plasma/layout/fluxos-layout.js", a.plasma_layout.clone()),
+        Artifact::new(&layout, a.plasma_layout.clone()),
         Artifact::new("etc/xdg/hypr/fluxos.conf", a.hyprland.clone()),
         Artifact::new("etc/dconf/db/local.d/00-fluxos", a.dconf.clone()),
         Artifact::new("etc/sysctl.d/90-fluxos.conf", a.sysctl_conf.clone()),

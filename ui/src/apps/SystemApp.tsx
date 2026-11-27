@@ -5,7 +5,7 @@ import { CodeView } from "../components/CodeView";
 import { ArrowText, Button, Chip, Empty, KV, Section, Swatch, Tabs } from "../components/ui";
 import { api } from "../lib/api";
 import { contrast, contrastGrade } from "../lib/color";
-import { ago, shortHash, titleCase } from "../lib/format";
+import { ago, desktopLabel, shortHash, titleCase } from "../lib/format";
 import type { SessionInfo, Spec } from "../lib/types";
 import { errorText } from "../state/actions";
 import { useSession } from "../state/session";
@@ -57,7 +57,7 @@ function Overview({ spec }: { spec: Spec }) {
         <Card title="Desktop">
           <KV
             rows={[
-              ["Environment", titleCase(spec.desktop.environment)],
+              ["Environment", desktopLabel(spec.desktop.environment)],
               ["Style", titleCase(spec.desktop.style)],
               ["Dock", spec.desktop.dock.enabled ? `${spec.desktop.dock.position}${spec.desktop.dock.autohide ? ", auto-hide" : ""}` : "off"],
               ["Windows", spec.desktop.windows.tiling ? `tiling, ${spec.desktop.windows.gaps_px}px gaps` : spec.desktop.windows.snapping ? "floating with snapping" : "floating"],

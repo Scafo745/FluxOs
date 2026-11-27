@@ -1,10 +1,10 @@
-import { Accessibility, Contrast, LogOut, Moon, Power, Shuffle, Sun, Type, Wind } from "lucide-react";
+import { Accessibility, Contrast, LogOut, Moon, Power, RotateCcw, Shuffle, Sun, Type, Wind } from "lucide-react";
 import { useState } from "react";
 
 import { Spinner, TierBadge } from "../components/ui";
 import { api } from "../lib/api";
 import type { RawOp, Spec, StylePreset } from "../lib/types";
-import { quick, restart } from "../state/actions";
+import { power, quick } from "../state/actions";
 import { useSession } from "../state/session";
 import { useShell } from "../state/shell";
 import { useSystem } from "../state/system";
@@ -229,9 +229,16 @@ export function ControlCenter({ spec }: { spec: Spec }) {
           <span className="min-w-0 flex-1 truncate" title={session?.principal.id}>
             {session?.name} · {session?.principal.role === "admin" ? "owner" : session?.principal.role}
           </span>
-          {system?.status === "staged" && (
-            <button type="button" onClick={() => void restart()} className="flex items-center gap-1 rounded-md px-2 py-1 font-semibold text-warn hover:bg-warn/10">
-              <Power className="size-3.5" /> Restart
+          <button
+            type="button"
+            onClick={() => power("restart")}
+            className={`flex items-center gap-1 rounded-md px-2 py-1 hover:bg-fg/10 hover:text-fg ${system?.status === "staged" ? "font-semibold text-warn" : ""}`}
+          >
+            <RotateCcw className="size-3.5" /> Restart
+          </button>
+          {system?.target?.kind === "nixos" && (
+            <button type="button" onClick={() => power("shutdown")} className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-fg/10 hover:text-fg">
+              <Power className="size-3.5" /> Shut down
             </button>
           )}
           <button

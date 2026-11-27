@@ -18,7 +18,7 @@ export type PlanStatus =
   | "no_op";
 export type GenStatus = "pending" | "active" | "superseded" | "staged" | "failed" | "rolled-back";
 export type StylePreset = "glass-dock" | "snap-layouts" | "tiling" | "classic-panel" | "ops-center" | "focus" | "custom";
-export type DesktopEnv = "plasma" | "gnome" | "hyprland" | "cosmic";
+export type DesktopEnv = "fluxos" | "plasma" | "gnome" | "hyprland" | "cosmic";
 
 export interface BootStage {
   id: string;
@@ -415,4 +415,87 @@ export interface AgentHealth {
   local_only: boolean;
   knowledge_docs: number;
   providers: { id: string; model: string; local: boolean; circuit: string; recent_failures: number; last_error?: string }[];
+}
+
+// ------------------------------------------------------ user session --
+// From flux-session (crates/flux-session), relayed by fluxd.
+
+export interface UserSession {
+  available: boolean;
+  reason?: string;
+  user?: string;
+  uid?: number;
+  home?: string;
+  shell?: string;
+  hostname?: string;
+  kernel?: string;
+  uptime_s?: number;
+  load?: number[];
+  cpus?: number;
+  memory?: { total_kb: number | null; available_kb: number | null };
+  disk?: { path: string; total: number; free: number } | null;
+  wayland?: boolean;
+}
+
+export interface FileEntry {
+  name: string;
+  kind: "dir" | "file" | "link" | "other";
+  symlink: boolean;
+  size: number;
+  modified: number | null;
+  mode: string;
+  uid: number;
+  hidden: boolean;
+}
+
+export interface DirListing {
+  path: string;
+  parent: string | null;
+  home: string;
+  entries: FileEntry[];
+  truncated: boolean;
+}
+
+export interface FileContent {
+  path: string;
+  size: number;
+  modified: number | null;
+  mime: string;
+  text?: string;
+  data_url?: string;
+  binary?: boolean;
+  truncated?: boolean;
+}
+
+export interface ProcessInfo {
+  pid: number;
+  ppid: number;
+  name: string;
+  state: string;
+  uid: number;
+  user: string;
+  cpu_ticks: number;
+  threads: number;
+  start_ticks: number;
+  rss: number;
+  cmd: string;
+  kernel: boolean;
+}
+
+export interface ProcessList {
+  uid: number;
+  total_ticks: number;
+  ticks_per_second: number;
+  cpus: number;
+  processes: ProcessInfo[];
+}
+
+export interface DesktopApp {
+  id: string;
+  name: string;
+  generic?: string | null;
+  comment?: string | null;
+  icon?: string | null;
+  categories: string[];
+  terminal: boolean;
 }

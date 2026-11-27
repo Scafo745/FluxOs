@@ -128,6 +128,8 @@ pub struct Engine {
     pub agent_url: String,
     /// Extra accepted Host header names (loopback is always accepted).
     pub allowed_hosts: Vec<String>,
+    /// The console user's flux-session (terminal, files, apps), if any.
+    pub session: crate::session::SessionLink,
     current: RwLock<u64>,
     apply_lock: tokio::sync::Mutex<()>,
     fault: Mutex<Option<Fault>>,
@@ -150,6 +152,7 @@ pub struct EngineParts {
     pub boot_id: String,
     pub agent_url: String,
     pub allowed_hosts: Vec<String>,
+    pub session: crate::session::SessionLink,
 }
 
 fn tier_u8(t: RiskTier) -> Option<u8> {
@@ -188,6 +191,7 @@ impl Engine {
             boot_id: p.boot_id,
             agent_url: p.agent_url,
             allowed_hosts: p.allowed_hosts,
+            session: p.session,
             current: RwLock::new(p.current),
             apply_lock: tokio::sync::Mutex::new(()),
             fault: Mutex::new(None),
@@ -218,7 +222,7 @@ impl Engine {
         self.fault.lock().expect("fault lock").take()
     }
 
-    fn audit(&self, r: Record<'_>) {
+    pub(crate) fn audit(&self, r: Record<'_>) {
         if let Err(e) = self.audit.append(r) {
             tracing::error!("audit append failed: {e:#}");
             self.set_degraded(format!("audit append failed: {e}"));
@@ -849,6 +853,30 @@ impl Engine {
             self.replay_simulated_boot(n, &meta).await?;
         }
         Ok(json!({ "generation": n, "message": msg, "staged_activated": was_staged }))
+    }
+
+    /// Shuts the machine down (real targets only). Audited before it happens.
+    pub async fn poweroff(&self, who: &Principal) -> EResult<Value> {
+        if who.role != crate::auth::Role::Admin {
+            return Err(EngineError::forbidden("only the device owner or an administrator can shut down"));
+        }
+        if self.target.name() == "sandbox" {
+            return Err(EngineError::new(409, "not_supported", "the sandbox target has no machine to shut down"));
+        }
+        let n = self.current_generation();
+        self.audit(Record {
+            kind: "system.poweroff",
+            actor: &who.id,
+            plan_id: None,
+            generation: Some(n),
+            tier: Some(RiskTier::Medium.as_u8()),
+            summary: "Shut down from the FluxOS UI".into(),
+            details: json!({}),
+        });
+        self.events.emit("system.poweroff", json!({ "generation": n }));
+        let target = self.target.clone();
+        let msg = tokio::task::spawn_blocking(move || target.poweroff()).await.map_err(EngineError::internal)??;
+        Ok(json!({ "generation": n, "message": msg }))
     }
 
     /// Emits the boot stages of a simulated reboot so UIs can show the new

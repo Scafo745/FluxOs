@@ -263,7 +263,7 @@ pub static TOOLS: &[ToolSpec] = &[
         Medium,
         "desktop",
         SetEnvironment,
-        "Plasma, GNOME, Hyprland (tiling) or COSMIC."
+        "fluxos (the FluxOS shell, a web desktop that follows this spec), plasma, gnome, hyprland (tiling) or cosmic."
     ),
     // Tier 3: kernel, drivers, security policy, session lock-down, boot
     tool!(
