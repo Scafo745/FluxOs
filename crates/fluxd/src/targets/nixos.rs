@@ -67,6 +67,27 @@ fn needs_rebuild(current: Option<&str>, next: &str) -> bool {
     current.is_none_or(|c| normalize_module(c) != normalize_module(next))
 }
 
+/// The systemd health check from `systemctl is-system-running` and the
+/// `systemctl --failed` list. A boot still in progress is not a failure:
+/// fluxd checks health while the machine boots, and a change can land before
+/// the last boot job finished. Failed units are reported, but only a state
+/// such as maintenance or stopping fails the check.
+fn system_state_check(state: &str, failed: &str) -> HealthResult {
+    let failed: Vec<&str> = failed.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let list = failed.join("; ");
+    match state {
+        "running" => HealthResult::pass("system.state", "systemd state", "running"),
+        "degraded" => HealthResult::warn("system.state", "systemd state", format!("degraded: {list}")),
+        "starting" | "initializing" if failed.is_empty() => {
+            HealthResult::pass("system.state", "systemd state", "booting, no failed units")
+        }
+        "starting" | "initializing" => {
+            HealthResult::warn("system.state", "systemd state", format!("booting; failed: {list}"))
+        }
+        other => HealthResult::fail("system.state", "systemd state", other.to_string()),
+    }
+}
+
 pub struct NixosTarget {
     config_dir: PathBuf,
     flake: Option<String>,
@@ -363,14 +384,9 @@ impl Target for NixosTarget {
             return out;
         }
         let (_, state) = Self::systemctl(&["is-system-running"]);
-        out.push(match state.as_str() {
-            "running" => HealthResult::pass("system.state", "systemd state", "running"),
-            "degraded" => {
-                let (_, failed) = Self::systemctl(&["--failed", "--no-legend", "--plain"]);
-                HealthResult::warn("system.state", "systemd state", format!("degraded: {}", failed.replace('\n', "; ")))
-            }
-            other => HealthResult::fail("system.state", "systemd state", other.to_string()),
-        });
+        let failed =
+            if state == "running" { String::new() } else { Self::systemctl(&["--failed", "--no-legend", "--plain"]).1 };
+        out.push(system_state_check(&state, &failed));
         let route = Command::new("ip")
             .args(["route", "show", "default"])
             .output()

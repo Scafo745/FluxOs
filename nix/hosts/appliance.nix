@@ -26,6 +26,10 @@
     wantedBy = [ "multi-user.target" ];
     before = [ "fluxd.service" ];
     requiredBy = [ "fluxd.service" ];
+    # Every rebuilt generation has a new flake source, so this unit always
+    # changes; restarting it would restart fluxd (Requires=) in the middle of
+    # its own nixos-rebuild switch. It only matters on first boot.
+    restartIfChanged = false;
     serviceConfig = { Type = "oneshot"; RemainAfterExit = true; };
     script = ''
       if [ ! -e /etc/nixos/flake.nix ]; then
@@ -73,8 +77,11 @@
     wants = [ "network-online.target" ];
     unitConfig.ConditionCredential = "fluxos.selftest";
     path = with pkgs; [ curl jq coreutils gnugrep systemd ];
+    # Its own nixos-rebuild switch must not restart it.
+    restartIfChanged = false;
     serviceConfig = {
-      Type = "oneshot";
+      # Not a oneshot: the boot finishes while it runs, as it would for a user.
+      Type = "exec";
       StandardOutput = "tty";
       StandardError = "tty";
       TTYPath = "/dev/ttyS0";

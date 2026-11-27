@@ -232,6 +232,9 @@ in
       description = "FluxOS system daemon";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
+      # fluxd runs nixos-rebuild switch itself, so a switch must not restart it
+      # halfway (like nixos-upgrade.service). A new fluxd starts at the next boot.
+      restartIfChanged = false;
       # Sessions read the live theme files fluxd publishes at boot.
       before = [ "display-manager.service" "cage-tty1.service" ];
       # nixos-rebuild, nix and systemctl are the only tools fluxd runs.
