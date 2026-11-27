@@ -60,6 +60,14 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
+        Command::PairCode { state_dir } => {
+            let path = state_dir.join("secrets/pairing.code");
+            let code = std::fs::read_to_string(&path)
+                .with_context(|| format!("read {} (is fluxd running with this state dir?)", path.display()))?;
+            println!("{}", code.trim());
+            eprintln!("Enter it in the FluxOS UI, or open /#pair={} on the UI address.", code.trim().replace('-', ""));
+            Ok(())
+        }
         Command::Schema => {
             let v = json!({ "plan_request": api::plan_request_schema(), "spec": registry::schema_of::<SystemSpec>() });
             println!("{}", serde_json::to_string_pretty(&v)?);
@@ -73,11 +81,16 @@ async fn main() -> Result<()> {
 }
 
 async fn serve(args: ServeArgs) -> Result<()> {
+    if let Some(dir) = &args.ui_dir
+        && !dir.join("index.html").is_file()
+    {
+        anyhow::bail!("--ui-dir {} has no index.html; build the UI first (cd ui && npm run build)", dir.display());
+    }
     let boot_args = args.clone();
     let engine = tokio::task::spawn_blocking(move || boot::boot(&boot_args)).await??;
-    let app = api::router(engine.clone(), &args.cors_origins);
+    let app = api::router(engine.clone(), &args.cors_origins, args.ui_dir.as_deref());
     let listener = tokio::net::TcpListener::bind(args.listen).await.with_context(|| format!("bind {}", args.listen))?;
-    boot::mark_ready(&engine, &args.listen.to_string());
+    boot::mark_ready(&engine, &args.listen.to_string(), args.ui_dir.is_some());
 
     let (tx, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {

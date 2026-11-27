@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::audit::{AuditLog, Record};
-use crate::auth::{Principal, Tokens};
+use crate::auth::{PairError, Principal, Tokens};
 use crate::events::EventBus;
 use crate::health::{self, HealthResult, HealthStatus};
 use crate::signing::{self, Signer};
@@ -75,6 +75,7 @@ pub struct BootStage {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct BootReport {
     pub version: String,
+    pub boot_id: String,
     pub started_at: String,
     pub ready: bool,
     pub duration_ms: u128,
@@ -121,6 +122,12 @@ pub struct Engine {
     pub profiles: RwLock<ProfileSet>,
     pub boot: RwLock<BootReport>,
     pub degraded: RwLock<Vec<String>>,
+    /// Random id of this daemon instance; lets clients detect restarts.
+    pub boot_id: String,
+    /// flux-agent address as seen by browsers.
+    pub agent_url: String,
+    /// Extra accepted Host header names (loopback is always accepted).
+    pub allowed_hosts: Vec<String>,
     current: RwLock<u64>,
     apply_lock: tokio::sync::Mutex<()>,
     fault: Mutex<Option<Fault>>,
@@ -140,6 +147,9 @@ pub struct EngineParts {
     pub target: Arc<dyn Target>,
     pub profiles: ProfileSet,
     pub current: u64,
+    pub boot_id: String,
+    pub agent_url: String,
+    pub allowed_hosts: Vec<String>,
 }
 
 fn tier_u8(t: RiskTier) -> Option<u8> {
@@ -175,6 +185,9 @@ impl Engine {
             profiles: RwLock::new(p.profiles),
             boot: RwLock::new(BootReport::default()),
             degraded: RwLock::new(Vec::new()),
+            boot_id: p.boot_id,
+            agent_url: p.agent_url,
+            allowed_hosts: p.allowed_hosts,
             current: RwLock::new(p.current),
             apply_lock: tokio::sync::Mutex::new(()),
             fault: Mutex::new(None),
@@ -327,7 +340,16 @@ impl Engine {
             });
             self.events.emit(
                 kind,
-                json!({ "plan_id": plan.id, "tier": plan.evaluation.tier, "decision": plan.decision, "summary": plan.change_summary, "status": plan.status }),
+                json!({
+                    "plan_id": plan.id,
+                    "tier": plan.evaluation.tier,
+                    "decision": plan.decision,
+                    "summary": plan.change_summary,
+                    "status": plan.status,
+                    "prompt": plan.intent.prompt,
+                    "source": plan.intent.source,
+                    "session_id": plan.intent.session_id,
+                }),
             );
         }
         Ok(plan)
@@ -553,8 +575,12 @@ impl Engine {
             summary: format!("Snapshot: generation {previous} kept; building generation {n}"),
             details: json!({ "previous": previous, "approval": plan.approval, "artifacts": meta.artifacts.len() }),
         });
-        self.events
-            .emit("apply.started", json!({ "plan_id": id, "generation": n, "previous": previous, "tier": eval.tier }));
+        // Lets a UI recognize the plans it started (and skip duplicate notifications).
+        let origin = json!({ "source": plan.intent.source, "session_id": plan.intent.session_id });
+        self.events.emit(
+            "apply.started",
+            json!({ "plan_id": id, "generation": n, "previous": previous, "tier": eval.tier, "origin": origin }),
+        );
 
         let fault = self.take_fault();
         let target = self.target.clone();
@@ -608,7 +634,7 @@ impl Engine {
                 });
                 self.events.emit(
                     "apply.failed",
-                    json!({ "plan_id": id, "generation": n, "restored": previous, "error": format!("{e:#}") }),
+                    json!({ "plan_id": id, "generation": n, "restored": previous, "error": format!("{e:#}"), "origin": origin }),
                 );
                 return Ok(plan);
             }
@@ -677,7 +703,7 @@ impl Engine {
             });
             self.events.emit(
                 "apply.rolled_back",
-                json!({ "plan_id": id, "generation": n, "restored": previous, "failed": failed }),
+                json!({ "plan_id": id, "generation": n, "restored": previous, "failed": failed, "origin": origin }),
             );
             return Ok(plan);
         }
@@ -722,7 +748,15 @@ impl Engine {
         });
         self.events.emit(
             "generation.switched",
-            json!({ "generation": n, "previous": previous, "plan_id": id, "staged": outcome.staged, "theme": candidate.design.theme_name, "summary": meta.summary }),
+            json!({
+                "generation": n,
+                "previous": previous,
+                "plan_id": id,
+                "staged": outcome.staged,
+                "theme": candidate.design.theme_name,
+                "summary": meta.summary,
+                "origin": origin,
+            }),
         );
         Ok(plan)
     }
@@ -736,7 +770,13 @@ impl Engine {
 
     /// Undo: propose restoring a generation (default: the current one's parent).
     /// A person who may approve the resulting tier gets it applied immediately.
-    pub async fn rollback(&self, who: &Principal, to: Option<u64>, prompt: Option<String>) -> EResult<PlanRecord> {
+    pub async fn rollback(
+        &self,
+        who: &Principal,
+        to: Option<u64>,
+        prompt: Option<String>,
+        session_id: Option<String>,
+    ) -> EResult<PlanRecord> {
         let current = self.current_generation();
         let to = match to {
             Some(t) => t,
@@ -758,7 +798,8 @@ impl Engine {
             intent: Intent {
                 prompt: prompt.or_else(|| Some(format!("Roll back to generation {to}"))),
                 source: Some("rollback".into()),
-                session_id: None,
+                session_id: session_id
+                    .filter(|s| s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')),
             },
             summary: Some(format!("Restore generation {to}")),
             rationale: None,
@@ -805,24 +846,74 @@ impl Engine {
         });
         self.events.emit("system.reboot", json!({ "generation": n, "message": msg, "staged_activated": was_staged }));
         if self.target.name() == "sandbox" {
-            let spec = self.current_spec()?;
-            let kernel = flux_core::catalog::kernel(spec.kernel.variant);
-            for (stage, detail) in [
-                ("firmware", "POST complete".to_string()),
-                ("bootloader", format!("fluxos-gen-{n} selected (older generations kept)")),
-                ("kernel", format!("{} {}", kernel.label, kernel.version_hint)),
-                (
-                    "scheduler",
-                    flux_core::catalog::scheduler(spec.kernel.sched_ext).binary.unwrap_or("default EEVDF").to_string(),
-                ),
-                ("session", format!("{:?} on {:?}", spec.session.mode, spec.desktop.environment)),
-            ] {
-                self.events
-                    .emit("boot.stage", json!({ "id": stage, "status": "ok", "detail": detail, "reboot": true }));
-            }
-            self.events.emit("boot.ready", json!({ "generation": n, "reboot": true }));
+            self.replay_simulated_boot(n, &meta).await?;
         }
         Ok(json!({ "generation": n, "message": msg, "staged_activated": was_staged }))
+    }
+
+    /// Emits the boot stages of a simulated reboot so UIs can show the new
+    /// generation coming up. The health stage runs the real checks.
+    async fn replay_simulated_boot(&self, n: u64, meta: &GenerationMeta) -> EResult<()> {
+        let started = Instant::now();
+        let spec = self.current_spec()?;
+        let kernel = flux_core::catalog::kernel(spec.kernel.variant);
+        let sched = flux_core::catalog::scheduler(spec.kernel.sched_ext);
+        let older = self.store.generation_numbers()?.iter().filter(|g| **g < n).count();
+        self.events.emit(
+            "boot.begin",
+            json!({ "version": self.version, "target": self.target.name(), "boot_id": self.boot_id, "reboot": true }),
+        );
+        let session = match spec.session.mode {
+            flux_core::spec::SessionMode::Standard => {
+                format!("{:?} desktop · {:?} style", spec.desktop.environment, spec.desktop.style).to_lowercase()
+            }
+            mode => format!("{mode:?} session → {}", spec.session.kiosk_url.as_deref().unwrap_or("-")).to_lowercase(),
+        };
+        let stage = |id: &str, title: &str, status: &str, detail: String| json!({ "id": id, "title": title, "status": status, "detail": detail, "duration_ms": 0, "reboot": true });
+        let stages = [
+            stage("firmware", "Firmware", "ok", "POST complete".into()),
+            stage(
+                "bootloader",
+                "Bootloader",
+                "ok",
+                format!("fluxos-gen-{n} selected · {older} older generations kept"),
+            ),
+            stage("kernel", "Kernel", "ok", format!("{} · {}", kernel.label, kernel.version_hint)),
+            stage(
+                "scheduler",
+                "CPU scheduler",
+                "ok",
+                match sched.binary {
+                    Some(bin) => format!("{bin} loaded via sched_ext ({})", sched.maturity),
+                    None => "kernel default (EEVDF)".into(),
+                },
+            ),
+            stage("session", "Session", "ok", session),
+        ];
+        for s in stages {
+            self.events.emit("boot.stage", s);
+        }
+        let target = self.target.clone();
+        let infos = meta.artifacts.clone();
+        let checks = tokio::task::spawn_blocking(move || target.health(&spec, n, &infos))
+            .await
+            .map_err(EngineError::internal)?;
+        let passed = checks.iter().filter(|c| c.status == HealthStatus::Pass).count();
+        let failed = checks.iter().any(|c| c.status == HealthStatus::Fail);
+        self.events.emit(
+            "boot.stage",
+            stage(
+                "health",
+                "Health checks",
+                if failed { "fail" } else { "ok" },
+                format!("{passed}/{} passed", checks.len()),
+            ),
+        );
+        self.events.emit(
+            "boot.ready",
+            json!({ "generation": n, "reboot": true, "duration_ms": started.elapsed().as_millis(), "boot_id": self.boot_id, "degraded": self.degraded_reasons() }),
+        );
+        Ok(())
     }
 
     pub fn generations(&self) -> EResult<Vec<GenerationMeta>> {
@@ -831,6 +922,88 @@ impl Engine {
             out.push(self.store.load_meta(n)?);
         }
         Ok(out)
+    }
+
+    /// Exchanges a one-time pairing code for a session token.
+    pub fn pair(&self, code: &str, name: &str) -> EResult<Value> {
+        match self.tokens.pair(code, name, self.mode) {
+            Ok(p) => {
+                self.audit(Record {
+                    kind: "session.paired",
+                    actor: &p.principal.id,
+                    plan_id: None,
+                    generation: None,
+                    tier: None,
+                    summary: format!("Paired \"{}\" as {}", p.session.name, p.principal.id),
+                    details: json!({ "session": p.session.public() }),
+                });
+                self.events.emit("session.paired", json!({ "session": p.session.public() }));
+                tracing::info!(target: "fluxd::pairing", "screen paired; next pairing code {}", self.tokens.pairing_code());
+                Ok(json!({
+                    "token": p.token,
+                    "session": p.session.public(),
+                    "principal": p.principal,
+                    "mode": self.mode,
+                    "intent_token": self.tokens.intent_token(),
+                    "agent_url": self.agent_url,
+                }))
+            }
+            Err(PairError::WrongCode { attempts_left }) => Err(EngineError::new(
+                403,
+                "wrong_code",
+                format!("That code is not valid. {attempts_left} attempts left before it changes."),
+            )
+            .with_details(json!({ "attempts_left": attempts_left }))),
+            Err(PairError::Locked { retry_after_s, rotated }) => {
+                if rotated {
+                    self.audit(Record {
+                        kind: "pairing.locked",
+                        actor: "unknown",
+                        plan_id: None,
+                        generation: None,
+                        tier: None,
+                        summary: format!(
+                            "{} wrong pairing codes; code rotated and pairing paused for {retry_after_s}s",
+                            crate::auth::PAIR_ATTEMPTS
+                        ),
+                        details: json!({}),
+                    });
+                    tracing::warn!(
+                        target: "fluxd::pairing",
+                        "too many wrong pairing codes; new code {} (pairing paused {retry_after_s}s)",
+                        self.tokens.pairing_code()
+                    );
+                }
+                Err(EngineError::new(
+                    429,
+                    "pairing_locked",
+                    format!("Too many wrong codes. Try again in {retry_after_s}s with the new code."),
+                )
+                .with_details(json!({ "retry_after_s": retry_after_s })))
+            }
+            Err(PairError::Internal(e)) => Err(EngineError::internal(e)),
+        }
+    }
+
+    /// Revokes a paired screen. Anyone may revoke their own session; admins any.
+    pub fn revoke_session(&self, who: &Principal, id: &str) -> EResult<Value> {
+        let own = who.session.as_deref() == Some(id);
+        if !own && !who.can_manage_sessions() {
+            return Err(EngineError::forbidden("only an administrator can revoke other screens"));
+        }
+        let removed =
+            self.tokens.revoke(id)?.ok_or_else(|| EngineError::not_found(format!("session {id} not found")))?;
+        self.audit(Record {
+            kind: "session.revoked",
+            actor: &who.id,
+            plan_id: None,
+            generation: None,
+            tier: None,
+            summary: format!("Revoked \"{}\"{}", removed.name, if own { " (signed out)" } else { "" }),
+            details: json!({ "session": removed.public() }),
+        });
+        self.events.emit("session.revoked", json!({ "session": removed.public() }));
+        Ok(json!({ "revoked": removed.public() }))
     }
 
     pub fn save_profile(&self, who: &Principal, id: &str, name: &str, summary: Option<String>) -> EResult<Value> {

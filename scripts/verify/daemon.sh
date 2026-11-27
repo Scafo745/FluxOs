@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Verifies fluxd's safety model end to end against a throwaway state
-# directory: tiers and approvals, blocked actions, validation, staged kernel
-# changes, automatic rollback, undo, MCP, signed profiles, audit chain, SSE,
-# crash recovery, audit tamper detection, fleet mode and change freezes.
+# directory: screen pairing and browser-facing hardening, tiers and
+# approvals, blocked actions, validation, staged kernel changes, automatic
+# rollback, undo, MCP, signed profiles, audit chain, SSE, crash recovery,
+# audit tamper detection, fleet mode, change freezes and serving the web UI.
 #
 #   cargo build -p fluxd && scripts/verify/daemon.sh
 source "$(dirname "$0")/lib.sh"
@@ -32,6 +33,41 @@ check "every boot stage is ok" "$(curl -s $U/v1/boot | jq '[.stages[] | select(.
 check "generation 1 bootstrapped" "$(get $G /v1/system | jq .generation)" 1
 check "unauthenticated request refused" "$(http_code $U/v1/system)" 401
 check "unknown token refused" "$(http_code -H 'Authorization: Bearer flx_wrong' $U/v1/system)" 401
+
+section "Screen pairing"
+pair() { curl -s -X POST -H 'content-type: application/json' "$U/v1/pair" -d "$1"; }
+check "pairing code is not exposed by the API" "$(curl -s $U/v1/boot $U/v1/health $U/v1/ui-config | grep -c "$(tr -d '-' <"$STATE/secrets/pairing.code" | tr -d '\n')")" 0
+check "ui-config tells the UI where the agent is" "$(curl -s $U/v1/ui-config | jq -r .agent_url)" "http://127.0.0.1:7701"
+check "wrong code refused" "$(pair '{"code":"AAAA-AAAA"}' | jq -r .error.code)" wrong_code
+CODE=$(cat "$STATE/secrets/pairing.code")
+P=$(pair "{\"code\":\"$(echo "$CODE" | tr 'A-Z' 'a-z')\",\"name\":\"Verify browser\"}")
+S=$(echo "$P" | jq -r .token)
+check "code pairs (case and dash insensitive)" "$(echo "$P" | jq -r '.principal.role')" admin
+check "pairing hands over the agent intent token" "$(echo "$P" | jq -r .intent_token)" "$(cat "$STATE/secrets/intent.token")"
+check "session token works" "$(curl -s -H "Authorization: Bearer $S" $U/v1/whoami | jq -r '.id | startswith("owner@se_")')" true
+check "codes are single use" "$(pair "{\"code\":\"$CODE\"}" | jq -r .error.code)" wrong_code
+check "only the token hash is stored" "$(grep -c "$S" "$STATE/secrets/sessions.json")" 0
+check "admin lists paired screens" "$(get $A /v1/sessions | jq '.sessions | length')" 1
+check "agent cannot list paired screens" "$(get $G /v1/sessions | jq -r .error.code)" forbidden
+for _ in 1 2 3 4; do pair '{"code":"AAAA-AAAA"}' >/dev/null; done
+check "fifth wrong code locks pairing" "$(pair '{"code":"AAAA-AAAA"}' | jq -r .error.code)" pairing_locked
+check "even the right code waits out the lockout" "$(pair "{\"code\":\"$(cat "$STATE/secrets/pairing.code")\"}" | jq -r .error.code)" pairing_locked
+check "logout revokes the session" "$(curl -s -X POST -H "Authorization: Bearer $S" $U/v1/logout | jq -r .revoked.name)" "Verify browser"
+check "revoked token refused" "$(http_code -H "Authorization: Bearer $S" $U/v1/whoami)" 401
+check "static tokens cannot log out" "$(post $A /v1/logout '{}' | jq -r .error.code)" bad_request
+
+section "Browser-facing hardening"
+check "foreign Host refused (DNS rebinding)" "$(http_code -H 'Host: attacker.example' $U/v1/health)" 421
+check "loopback Host names accepted" "$(http_code -H 'Host: localhost:5173' $U/v1/health)/$(http_code -H 'Host: [::1]:7700' $U/v1/health)" "200/200"
+check "unknown API route is a JSON 404" "$(curl -s $U/v1/nope | jq -r .error.code)" not_found
+check "artifacts are served sandboxed" "$(curl -s -D - -o /dev/null $U/v1/wallpaper.svg | grep -ci '^content-security-policy: sandbox')" 1
+check "theme names cannot carry CSS or markup" \
+  "$(post $G /v1/plans/validate '{"operations":[{"tool":"design.set_palette","params":{"theme_name":"x */ @import url(//e.example/a.css); /*"}}]}' | errors)" invalid_theme_name
+check "theme names cannot carry SVG tags" \
+  "$(post $G /v1/plans/validate '{"operations":[{"tool":"design.set_palette","params":{"theme_name":"</title><script>"}}]}' | errors)" invalid_theme_name
+check "health reports the event cursor" "$(curl -s $U/v1/health | jq '.event_seq > 0')" true
+STALE=$(curl -s -N -m 2 -H "Authorization: Bearer $G" "$U/v1/events?since=999999" | grep -m1 '^event:' || true)
+check "a cursor from an older daemon replays this boot" "$STALE" "event: boot.begin"
 
 section "Tier 0: the agent applies with a snapshot"
 R=$(post $G '/v1/plans?auto_apply=true' '{"intent":{"prompt":"pink neon","source":"verify"},"operations":[{"tool":"design.generate_palette","params":{"accent":"#ff2e97","scheme":"dark","theme_name":"Pink Neon"}}]}')
@@ -166,5 +202,27 @@ check "user cannot approve it" "$(fpost $FU /v1/plans/$(echo "$P" | jq -r .id)/a
 check "admin approval is deferred by the freeze" "$(fpost $FA /v1/plans/$(echo "$P" | jq -r .id)/approve "{\"plan_hash\":\"$(echo "$P" | jq -r .plan_hash)\"}" | jq -r .error.code)" change_freeze
 check "tier 0 is not frozen" "$(fpost $FU '/v1/plans?auto_apply=true' '{"operations":[{"tool":"design.set_motion","params":{"preset":"calm"}}]}' | jq -r .status)" applied
 check "operator-disabled tool refused" "$(fpost $FA /v1/plans/validate '{"operations":[{"tool":"desktop.set_environment","params":{"environment":"gnome"}}]}' | errors)" disabled_tool
+check "fleet mode pairs screens as a local user, not an admin" \
+  "$(curl -s -X POST -H 'content-type: application/json' "http://127.0.0.1:$FPORT/v1/pair" -d "{\"code\":\"$(cat "$FLEET/secrets/pairing.code")\"}" | jq -r .principal.role)" user
+
+section "Serving the web UI"
+WEB=$(mktemp -d "${TMPDIR:-/tmp}/fluxd-ui.XXXXXX")
+mkdir -p "$WEB/ui" "$WEB/state"
+echo '<!doctype html><title>flux-ui-marker</title>' >"$WEB/ui/index.html"
+write_hardware "$WEB/state"
+WPORT=17740
+W=http://127.0.0.1:$WPORT
+start_fluxd "$WEB/state" $WPORT --ui-dir "$WEB/ui"
+check "UI served at /" "$(curl -s $W/ | grep -c flux-ui-marker)" 1
+check "client-side routes fall back to index.html" "$(curl -s $W/apps/timeline | grep -c flux-ui-marker)" 1
+CSP=$(curl -s -D - -o /dev/null $W/ | tr -d '\r' | grep -i '^content-security-policy:')
+check_match "UI CSP allows scripts from fluxd only" "$CSP" "script-src 'self';"
+check_match "UI CSP allows network access to fluxd and the agent only" "$CSP" "connect-src 'self' http://127\.0\.0\.1:7701;"
+check "UI cannot be framed" "$(curl -s -D - -o /dev/null $W/ | grep -ci '^x-frame-options: deny')" 1
+check "API routes win over the UI fallback" "$(curl -s $W/v1/nope | jq -r .error.code)" not_found
+check "foreign Host refused for the UI too" "$(http_code -H 'Host: attacker.example' $W/)" 421
+mkdir -p "$WEB/empty"
+timeout 10 "$FLUXD_BIN" serve --state-dir "$WEB/state2" --listen 127.0.0.1:17741 --ui-dir "$WEB/empty" >/dev/null 2>&1
+check "a UI directory without index.html is refused at start" "$?" 1
 
 summary

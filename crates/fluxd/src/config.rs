@@ -28,6 +28,11 @@ pub enum Command {
         #[arg(long, default_value_t = 1)]
         generation: u64,
     },
+    /// Print the current one-time code for pairing a FluxOS UI.
+    PairCode {
+        #[arg(long, env = "FLUX_STATE_DIR", default_value = "/var/lib/fluxos")]
+        state_dir: PathBuf,
+    },
     /// Print the JSON schema of plans and specs.
     Schema,
     /// Print the tool registry.
@@ -79,4 +84,14 @@ pub struct ServeArgs {
     /// Log nixos-rebuild commands instead of running them.
     #[arg(long, env = "FLUX_NIXOS_DRY_RUN")]
     pub nixos_dry_run: bool,
+    /// Serve the built web UI (ui/dist) at `/`.
+    #[arg(long, env = "FLUX_UI_DIR")]
+    pub ui_dir: Option<PathBuf>,
+    /// Address of flux-agent as seen by the browser, told to paired UIs.
+    #[arg(long, env = "FLUX_AGENT_PUBLIC_URL", default_value = "http://127.0.0.1:7701")]
+    pub agent_url: String,
+    /// Extra Host header names to accept (comma separated). Loopback names are
+    /// always accepted; anything else is refused to stop DNS rebinding.
+    #[arg(long, env = "FLUX_ALLOWED_HOSTS", value_delimiter = ',')]
+    pub allowed_hosts: Vec<String>,
 }

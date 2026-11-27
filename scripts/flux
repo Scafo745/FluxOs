@@ -13,6 +13,7 @@
 #   flux verify              verify the audit hash chain
 #   flux boot                boot stages
 #   flux reboot              activate a staged generation (simulated on the sandbox target)
+#   flux pair                one-time code and link that pair a browser with the web UI
 set -euo pipefail
 
 STATE="${FLUX_STATE_DIR:-$(cd "$(dirname "$0")/.." && pwd)/.flux-state}"
@@ -61,5 +62,13 @@ case "${1:-help}" in
   verify) api "$FLUXD/v1/audit/verify" | jq . ;;
   boot) curl -sS "$FLUXD/v1/boot" | jq -r '.stages[] | "\(if .status == "ok" then "✓" elif .status == "warn" then "!" else "✗" end) \(.title): \(.detail)"' ;;
   reboot) api -X POST "$FLUXD/v1/system/reboot" -d '{}' | jq . ;;
-  *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' ;;
+  pair)
+    # The code is only on disk and in the fluxd log; the API never serves it.
+    code="$(cat "$STATE/secrets/pairing.code" 2>/dev/null || true)"
+    [ -n "$code" ] || { echo "no pairing code in $STATE/secrets (is fluxd running with this state dir?)" >&2; exit 1; }
+    ui="${FLUX_UI_URL:-$(curl -sf -o /dev/null http://127.0.0.1:5173/ && echo http://127.0.0.1:5173 || echo "$FLUXD")}"
+    echo "code  $code   (works once; five wrong tries rotate it)"
+    echo "link  $ui/#pair=${code//-/}"
+    ;;
+  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' ;;
 esac

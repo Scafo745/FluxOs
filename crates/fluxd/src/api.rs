@@ -1,15 +1,17 @@
 //! HTTP API (JSON + SSE). Bound to 127.0.0.1 by default.
 
 use std::convert::Infallible;
+use std::path::Path as FsPath;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{DefaultBodyLimit, FromRequestParts, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, Path, Query, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use flux_core::policy::Decision;
 use flux_core::{SystemSpec, catalog, registry};
@@ -19,6 +21,8 @@ use serde_json::{Value, json};
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::auth::Principal;
@@ -61,7 +65,73 @@ impl FromRequestParts<AppState> for Auth {
     }
 }
 
-pub fn router(engine: AppState, origins: &[String]) -> Router {
+/// Hostname part of a Host header (`127.0.0.1:7700` → `127.0.0.1`, `[::1]:7700` → `::1`).
+fn host_name(host: &str) -> String {
+    let h = host.trim();
+    let name = if let Some(rest) = h.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        match h.rsplit_once(':') {
+            Some((name, port)) if port.chars().all(|c| c.is_ascii_digit()) => name,
+            _ => h,
+        }
+    };
+    name.trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// Loopback names are always fine; anything else must be allowlisted. A
+/// browser tricked by DNS rebinding sends the attacker's hostname, so this
+/// keeps web pages from reaching fluxd even though it listens on 127.0.0.1.
+pub fn host_allowed(host: Option<&str>, extra: &[String]) -> bool {
+    let Some(host) = host else { return true };
+    let name = host_name(host);
+    matches!(name.as_str(), "127.0.0.1" | "localhost" | "::1") || name.ends_with(".localhost") || extra.contains(&name)
+}
+
+async fn host_guard(State(e): State<AppState>, req: Request, next: Next) -> Response {
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .or_else(|| req.uri().authority().map(|a| a.as_str().to_string()));
+    if host_allowed(host.as_deref(), &e.allowed_hosts) {
+        next.run(req).await
+    } else {
+        EngineError::new(421, "host_not_allowed", "this Host is not served; add it with --allowed-hosts")
+            .into_response()
+    }
+}
+
+fn ui_csp(agent_url: &str) -> String {
+    // Origin only (scheme://host:port), restricted to URL-safe characters.
+    let origin: String = agent_url
+        .split_once("://")
+        .map(|(scheme, rest)| format!("{scheme}://{}", rest.split('/').next().unwrap_or("")))
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || ":/.-[]".contains(*c))
+        .collect();
+    format!(
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
+         font-src 'self' data:; connect-src 'self' {origin}; object-src 'none'; base-uri 'none'; \
+         form-action 'none'; frame-ancestors 'none'"
+    )
+}
+
+/// The built web UI with a strict Content-Security-Policy; unknown paths
+/// fall back to index.html for client-side routing.
+fn ui_service(dir: &FsPath, agent_url: &str) -> Router {
+    let csp = HeaderValue::from_str(&ui_csp(agent_url)).unwrap_or(HeaderValue::from_static("default-src 'self'"));
+    Router::new()
+        .fallback_service(ServeDir::new(dir).fallback(ServeFile::new(dir.join("index.html"))))
+        .layer(SetResponseHeaderLayer::overriding(header::CONTENT_SECURITY_POLICY, csp))
+        .layer(SetResponseHeaderLayer::overriding(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
+        .layer(SetResponseHeaderLayer::overriding(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer")))
+        .layer(SetResponseHeaderLayer::overriding(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")))
+}
+
+pub fn router(engine: AppState, origins: &[String], ui_dir: Option<&FsPath>) -> Router {
     let origins: Vec<HeaderValue> = origins.iter().filter_map(|o| o.parse().ok()).collect();
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
@@ -69,14 +139,19 @@ pub fn router(engine: AppState, origins: &[String]) -> Router {
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::HeaderName::from_static("last-event-id")])
         .max_age(Duration::from_secs(600));
 
-    Router::new()
+    let mut router = Router::new()
         .route("/v1/health", get(health))
         .route("/v1/boot", get(boot_report))
+        .route("/v1/ui-config", get(ui_config))
+        .route("/v1/pair", post(pair))
         .route("/v1/theme.css", get(theme_css))
         .route("/v1/tokens.json", get(tokens_json))
         .route("/v1/wallpaper.svg", get(wallpaper))
         .route("/v1/events", get(events))
         .route("/v1/whoami", get(whoami))
+        .route("/v1/logout", post(logout))
+        .route("/v1/sessions", get(list_sessions))
+        .route("/v1/sessions/{id}/revoke", post(revoke_session))
         .route("/v1/system", get(system))
         .route("/v1/system/reboot", post(reboot))
         .route("/v1/hardware", get(hardware))
@@ -101,11 +176,21 @@ pub fn router(engine: AppState, origins: &[String]) -> Router {
         .route("/v1/audit", get(audit))
         .route("/v1/audit/verify", get(audit_verify))
         .route("/v1/dev/fault", post(dev_fault))
-        .route("/mcp", post(crate::mcp::handle))
+        .route("/v1/{*rest}", any(api_not_found))
+        .route("/mcp", post(crate::mcp::handle));
+    if let Some(dir) = ui_dir {
+        router = router.fallback_service(ui_service(dir, &engine.agent_url));
+    }
+    router
         .layer(DefaultBodyLimit::max(1 << 20))
         .layer(cors)
+        .layer(middleware::from_fn_with_state(engine.clone(), host_guard))
         .layer(TraceLayer::new_for_http())
         .with_state(engine)
+}
+
+async fn api_not_found() -> EngineError {
+    EngineError::not_found("no such API route")
 }
 
 type R<T> = Result<T, EngineError>;
@@ -117,17 +202,58 @@ async fn health(State(e): State<AppState>) -> Json<Value> {
     Json(json!({
         "status": if degraded.is_empty() { "ok" } else { "degraded" },
         "version": e.version,
+        "boot_id": e.boot_id,
         "generation": e.current_generation(),
         "target": e.target.name(),
         "mode": e.mode,
         "uptime_s": e.started.elapsed().as_secs(),
         "degraded": degraded,
         "ready": e.boot.read().map(|b| b.ready).unwrap_or(false),
+        // Subscribe to /v1/events?since=<event_seq> to receive only newer events.
+        "event_seq": e.events.last_seq(),
     }))
 }
 
 async fn boot_report(State(e): State<AppState>) -> Json<Value> {
     Json(serde_json::to_value(&*e.boot.read().expect("boot lock")).unwrap_or_default())
+}
+
+async fn ui_config(State(e): State<AppState>) -> Json<Value> {
+    Json(
+        json!({ "version": e.version, "boot_id": e.boot_id, "mode": e.mode, "agent_url": e.agent_url, "pairing": "code" }),
+    )
+}
+
+#[derive(Deserialize)]
+struct PairBody {
+    code: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+async fn pair(State(e): State<AppState>, Json(b): Json<PairBody>) -> R<Json<Value>> {
+    Ok(Json(e.pair(&b.code, b.name.as_deref().unwrap_or(""))?))
+}
+
+async fn logout(State(e): State<AppState>, Auth(who): Auth) -> R<Json<Value>> {
+    let id = who.session.clone().ok_or_else(|| {
+        EngineError::bad_request(
+            "this is a static token, not a paired session; delete its file in secrets/ to rotate it",
+        )
+    })?;
+    Ok(Json(e.revoke_session(&who, &id)?))
+}
+
+async fn list_sessions(State(e): State<AppState>, Auth(who): Auth) -> R<Json<Value>> {
+    if !who.can_manage_sessions() {
+        return Err(EngineError::forbidden("only an administrator can list paired screens"));
+    }
+    let sessions: Vec<Value> = e.tokens.sessions().iter().map(|s| s.public()).collect();
+    Ok(Json(json!({ "current": who.session, "sessions": sessions })))
+}
+
+async fn revoke_session(State(e): State<AppState>, Auth(who): Auth, Path(id): Path<String>) -> R<Json<Value>> {
+    Ok(Json(e.revoke_session(&who, &id)?))
 }
 
 fn current_artifact(e: &Engine, path: &str) -> R<String> {
@@ -137,7 +263,17 @@ fn current_artifact(e: &Engine, path: &str) -> R<String> {
 }
 
 fn text(content_type: &'static str, body: String) -> Response {
-    ([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "no-cache")], body).into_response()
+    (
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "no-cache"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            // Rendered artifacts are data: opened directly, they still cannot run scripts.
+            (header::CONTENT_SECURITY_POLICY, "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 async fn theme_css(State(e): State<AppState>) -> R<Response> {
@@ -171,8 +307,8 @@ async fn events(
         .and_then(|s| s.parse().ok())
         .or(q.since)
         .unwrap_or(0);
-    let (replay, rx) = e.events.subscribe(since);
-    let last = replay.last().map(|ev| ev.seq).unwrap_or(since);
+    let (replay, rx, cursor) = e.events.subscribe(since);
+    let last = replay.last().map(|ev| ev.seq).unwrap_or(cursor);
     let live = BroadcastStream::new(rx).filter_map(|r| r.ok()).filter(move |ev| ev.seq > last);
     let stream = tokio_stream::iter(replay).chain(live).map(|ev| {
         Ok(SseEvent::default()
@@ -189,7 +325,7 @@ async fn events(
 async fn whoami(State(e): State<AppState>, Auth(who): Auth) -> Json<Value> {
     let tiers: Vec<u8> =
         (0..=3u8).filter(|t| flux_core::RiskTier::from_u8(*t).is_some_and(|t| who.can_approve(t, e.mode))).collect();
-    Json(json!({ "id": who.id, "role": who.role, "mode": e.mode, "can_approve_tiers": tiers }))
+    Json(json!({ "id": who.id, "role": who.role, "session": who.session, "mode": e.mode, "can_approve_tiers": tiers }))
 }
 
 async fn system(State(e): State<AppState>, _auth: Auth) -> R<Json<Value>> {
@@ -486,11 +622,13 @@ async fn generation_file(
 struct RollbackBody {
     to: Option<u64>,
     prompt: Option<String>,
+    /// Client session that asked, echoed in events so UIs recognize their own actions.
+    session_id: Option<String>,
 }
 
 async fn rollback(State(e): State<AppState>, Auth(who): Auth, body: Option<Json<RollbackBody>>) -> R<Json<Value>> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
-    Ok(Json(serde_json::to_value(e.rollback(&who, b.to, b.prompt).await?).unwrap_or_default()))
+    Ok(Json(serde_json::to_value(e.rollback(&who, b.to, b.prompt, b.session_id).await?).unwrap_or_default()))
 }
 
 // --------------------------------------------------------------- audit --

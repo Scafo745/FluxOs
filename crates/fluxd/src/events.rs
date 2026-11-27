@@ -52,10 +52,19 @@ impl EventBus {
         ev
     }
 
-    /// Buffered events after `after_seq`, plus a live receiver.
-    pub fn subscribe(&self, after_seq: u64) -> (Vec<Event>, broadcast::Receiver<Event>) {
+    /// Sequence number of the newest event.
+    pub fn last_seq(&self) -> u64 {
+        self.seq.load(Ordering::SeqCst)
+    }
+
+    /// Buffered events after `after_seq`, a live receiver, and the cursor
+    /// actually used. A cursor beyond the newest event comes from a previous
+    /// daemon instance (sequence numbers restart at boot), so the client
+    /// gets this instance's full buffer, starting with its boot events.
+    pub fn subscribe(&self, after_seq: u64) -> (Vec<Event>, broadcast::Receiver<Event>, u64) {
         let rx = self.tx.subscribe();
-        let replay = self.buf.lock().expect("event buffer").iter().filter(|e| e.seq > after_seq).cloned().collect();
-        (replay, rx)
+        let after = if after_seq > self.last_seq() { 0 } else { after_seq };
+        let replay = self.buf.lock().expect("event buffer").iter().filter(|e| e.seq > after).cloned().collect();
+        (replay, rx, after)
     }
 }

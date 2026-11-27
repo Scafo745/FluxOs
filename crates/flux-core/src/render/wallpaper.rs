@@ -9,6 +9,10 @@ use crate::spec::{SystemSpec, WallpaperStyle};
 const W: f64 = 1920.0;
 const H: f64 = 1080.0;
 
+pub fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
+}
+
 fn shift(hex: &str, dh: f64, dl: f64) -> String {
     let c = Rgb::from_hex(hex).unwrap_or(crate::color::BLACK).to_hsl();
     Hsl::new(c.h + dh, c.s, (c.l + dl).clamp(0.0, 1.0)).to_rgb().to_hex()
@@ -23,7 +27,7 @@ pub fn svg(spec: &SystemSpec) -> String {
         s,
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" preserveAspectRatio="xMidYMid slice">"#
     );
-    let _ = write!(s, "<title>FluxOS {} wallpaper</title>", spec.design.theme_name);
+    let _ = write!(s, "<title>FluxOS {} wallpaper</title>", xml_escape(&spec.design.theme_name));
     let bg = &p.background;
     match spec.desktop.wallpaper.style {
         WallpaperStyle::Solid => {
