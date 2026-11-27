@@ -13,7 +13,8 @@
 # only a rough stand-in for them.
 set -euo pipefail
 
-ova=$(find "$1" -maxdepth 1 -name '*.ova' | head -n 1)
+# -L: the argument is usually Nix's result symlink.
+ova=$(find -L "$1" -maxdepth 1 -name '*.ova' | head -n 1)
 [ -n "$ova" ] || { echo "no .ova in $1" >&2; exit 2; }
 out=$(mkdir -p "${2:-boot-test}" && cd "${2:-boot-test}" && pwd)
 work=$(mktemp -d)

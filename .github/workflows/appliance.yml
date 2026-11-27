@@ -70,6 +70,7 @@ jobs:
           nix eval --json .#nixosConfigurations.fluxos-appliance.config.warnings
 
       - name: Build the OVA
+        id: build
         run: nix build -L .#appliance-ova --out-link result-ova && ls -lh result-ova/
 
       - name: Boot test (QEMU, self-test)
@@ -85,7 +86,9 @@ jobs:
           path: boot-test/
           if-no-files-found: warn
 
+      # Kept even when the boot test fails, for trying it by hand; only a passing image is published.
       - name: Stage the image
+        if: always() && steps.build.outcome == 'success'
         run: |
           mkdir -p dist
           cp -L result-ova/*.ova dist/FluxOS.ova
@@ -93,6 +96,7 @@ jobs:
           ls -lh dist
 
       - name: Keep the image
+        if: always() && steps.build.outcome == 'success'
         uses: actions/upload-artifact@v6
         with:
           name: FluxOS-ova

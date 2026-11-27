@@ -8,12 +8,20 @@ set +e -u
 U=http://127.0.0.1:7700
 AGENT=http://127.0.0.1:7701
 S=/var/lib/fluxos/secrets
-say() { echo "FLUXOS-SELFTEST $*"; }
+# Each report opens the serial port anew: the serial getty that systemd starts
+# on it hangs up file descriptors opened before it.
+TTY=${SELFTEST_TTY:-/dev/ttyS0}
+say() { echo "FLUXOS-SELFTEST $*" >>"$TTY"; }
+dump() { sed 's/^/  | /' >>"$TTY"; }
 finish() {
   say "journal (warnings and errors):"
-  journalctl -b -p warning --no-pager -o short-monotonic | tail -n 80 | sed 's/^/  | /'
+  journalctl -b -p warning --no-pager -o short-monotonic | tail -n 80 | dump
   say "fluxd log:"
-  journalctl -b -u fluxd --no-pager -o short-monotonic | tail -n 60 | sed 's/^/  | /'
+  journalctl -b -u fluxd --no-pager -o short-monotonic | tail -n 60 | dump
+  say "shell log (cage, browser):"
+  journalctl -b -u cage-tty1 --no-pager -o short-monotonic | tail -n 40 | dump
+  say "flux-session log:"
+  journalctl -b _SYSTEMD_USER_UNIT=flux-session.service --no-pager -o short-monotonic | tail -n 20 | dump
   say "DONE $1"
   exit 0
 }
@@ -39,6 +47,40 @@ for _ in $(seq 1 90); do
 done
 say "paired screens $paired"
 [ "${paired:-0}" -ge 1 ] || fail "the shell did not pair"
+
+# The UI's terminal, files, processes and apps: flux-session runs in flux's
+# user manager, and fluxd relays to it.
+sess='{}'
+for _ in $(seq 1 30); do
+  sess=$(api $U/v1/session)
+  [ "$(echo "$sess" | jq -r .available)" = true ] && break
+  sleep 2
+done
+say "session $(echo "$sess" | jq -c '{available, user, shell, wayland, reason}')"
+[ "$(echo "$sess" | jq -r .available)" = true ] || fail "fluxd cannot reach flux-session"
+[ "$(echo "$sess" | jq -r .user)" = flux ] || fail "flux-session does not run as flux"
+say "session files $(api "$U/v1/session/files?path=~" | jq -c '{path, entries: (.entries | length)}')"
+say "session processes $(api $U/v1/session/processes | jq -c '{count: (.processes | length), mine: ([.processes[] | select(.user == "flux") | .name] | unique)}')"
+say "session apps $(api $U/v1/session/apps | jq -c '[.apps[].id]')"
+# The Terminal app's path end to end: a ticket, then the WebSocket (bash's
+# /dev/tcp; client frames are masked with a zero key), a command in flux's
+# login shell and its exit code.
+ticket=$(api -X POST $U/v1/session/terminal -d '{"cols":100,"rows":30}' | jq -r '.ticket // empty')
+[ "${ticket#flxt_}" != "$ticket" ] || fail "no terminal ticket"
+ws_send() { printf "\\x82\\x$(printf %02x $((0x80 | ${#1})))\\x00\\x00\\x00\\x00%s" "$1" >&3; }
+term=""
+if exec 3<>/dev/tcp/127.0.0.1/7700; then
+  printf 'GET /v1/session/terminal?ticket=%s HTTP/1.1\r\nHost: 127.0.0.1:7700\r\nOrigin: http://127.0.0.1:7700\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n' "$ticket" >&3
+  sleep 2
+  ws_send 'echo FLUX-TERM-$((6*7)) $(id -un) $SHELL'$'\r'
+  sleep 2
+  ws_send $'exit\r'
+  term=$(timeout 10 cat <&3 | tr -c '[:print:]\n' '.')
+  exec 3>&-
+fi
+say "terminal $(echo "$term" | head -n 1 | tr -d '\r') / $(echo "$term" | grep -ao 'FLUX-TERM-42 [^.]*' | head -n 1) / $(echo "$term" | grep -ao '"code":[0-9]*' | head -n 1)"
+echo "$term" | grep -aq 'FLUX-TERM-42 flux' || fail "the terminal did not run a command as flux"
+echo "$term" | grep -aq '"code":0' || fail "the terminal did not report the shell's exit"
 sleep 12
 say "screenshot desktop"
 
