@@ -154,6 +154,7 @@ pub fn router(engine: AppState, origins: &[String], ui_dir: Option<&FsPath>) -> 
         .route("/v1/sessions/{id}/revoke", post(revoke_session))
         .route("/v1/system", get(system))
         .route("/v1/system/reboot", post(reboot))
+        .route("/v1/system/poweroff", post(poweroff))
         .route("/v1/hardware", get(hardware))
         .route("/v1/tools", get(tools))
         .route("/v1/catalog", get(catalog_all))
@@ -176,6 +177,14 @@ pub fn router(engine: AppState, origins: &[String], ui_dir: Option<&FsPath>) -> 
         .route("/v1/audit", get(audit))
         .route("/v1/audit/verify", get(audit_verify))
         .route("/v1/dev/fault", post(dev_fault))
+        .route("/v1/session", get(session_info))
+        .route("/v1/session/files", get(session_files))
+        .route("/v1/session/file", get(session_file))
+        .route("/v1/session/processes", get(session_processes))
+        .route("/v1/session/processes/{pid}/signal", post(session_signal))
+        .route("/v1/session/apps", get(session_apps))
+        .route("/v1/session/apps/{id}/launch", post(session_launch))
+        .route("/v1/session/terminal", post(terminal_ticket).get(terminal_socket))
         .route("/v1/{*rest}", any(api_not_found))
         .route("/mcp", post(crate::mcp::handle));
     if let Some(dir) = ui_dir {
@@ -357,6 +366,10 @@ async fn system(State(e): State<AppState>, _auth: Auth) -> R<Json<Value>> {
 
 async fn reboot(State(e): State<AppState>, Auth(who): Auth) -> R<Json<Value>> {
     Ok(Json(e.reboot(&who).await?))
+}
+
+async fn poweroff(State(e): State<AppState>, Auth(who): Auth) -> R<Json<Value>> {
+    Ok(Json(e.poweroff(&who).await?))
 }
 
 async fn hardware(State(e): State<AppState>, _auth: Auth) -> Json<Value> {
@@ -665,4 +678,143 @@ async fn dev_fault(State(e): State<AppState>, Auth(who): Auth, Json(b): Json<Fau
     }
     e.set_fault(b.fault);
     Ok(Json(json!({ "armed": b.fault })))
+}
+
+// ------------------------------------------------------------- session --
+// The console user's terminal, files, processes and apps (crate::session).
+
+/// Only people get the user's session; the agent never does.
+fn person(who: &Principal) -> R<()> {
+    if who.role == crate::auth::Role::Agent {
+        return Err(EngineError::forbidden("the AI agent cannot use the user's session"));
+    }
+    Ok(())
+}
+
+fn session_audit(e: &Engine, who: &Principal, kind: &str, summary: String, details: Value) {
+    e.audit(crate::audit::Record {
+        kind,
+        actor: &who.id,
+        plan_id: None,
+        generation: None,
+        tier: None,
+        summary,
+        details,
+    });
+}
+
+async fn session_info(State(e): State<AppState>, Auth(who): Auth) -> R<Json<Value>> {
+    person(&who)?;
+    if !e.session.configured() {
+        return Ok(Json(json!({ "available": false, "reason": "no console user is configured" })));
+    }
+    Ok(Json(match e.session.call(json!({ "op": "info" })).await {
+        Ok(mut v) => {
+            v["available"] = json!(true);
+            v
+        }
+        Err(err) => json!({ "available": false, "user": e.session.user(), "reason": err.message }),
+    }))
+}
+
+#[derive(Deserialize)]
+struct PathQuery {
+    #[serde(default)]
+    path: String,
+}
+
+async fn session_files(State(e): State<AppState>, Auth(who): Auth, Query(q): Query<PathQuery>) -> R<Json<Value>> {
+    person(&who)?;
+    Ok(Json(e.session.call(json!({ "op": "ls", "path": q.path })).await?))
+}
+
+async fn session_file(State(e): State<AppState>, Auth(who): Auth, Query(q): Query<PathQuery>) -> R<Json<Value>> {
+    person(&who)?;
+    Ok(Json(e.session.call(json!({ "op": "read", "path": q.path })).await?))
+}
+
+async fn session_processes(State(e): State<AppState>, Auth(who): Auth) -> R<Json<Value>> {
+    person(&who)?;
+    Ok(Json(e.session.call(json!({ "op": "ps" })).await?))
+}
+
+#[derive(Deserialize)]
+struct SignalBody {
+    #[serde(default)]
+    signal: String,
+}
+
+async fn session_signal(
+    State(e): State<AppState>,
+    Auth(who): Auth,
+    Path(pid): Path<i64>,
+    Json(b): Json<SignalBody>,
+) -> R<Json<Value>> {
+    person(&who)?;
+    let r = e.session.call(json!({ "op": "signal", "pid": pid, "signal": b.signal })).await?;
+    let sig = if b.signal.is_empty() { "TERM" } else { b.signal.as_str() };
+    session_audit(&e, &who, "session.signal", format!("Sent SIG{sig} to process {pid}"), json!({ "pid": pid }));
+    Ok(Json(r))
+}
+
+async fn session_apps(State(e): State<AppState>, Auth(who): Auth) -> R<Json<Value>> {
+    person(&who)?;
+    Ok(Json(e.session.call(json!({ "op": "apps" })).await?))
+}
+
+async fn session_launch(State(e): State<AppState>, Auth(who): Auth, Path(id): Path<String>) -> R<Json<Value>> {
+    person(&who)?;
+    let r = e.session.call(json!({ "op": "launch", "id": id })).await?;
+    session_audit(&e, &who, "session.launch", format!("Started {id}"), json!({ "app": id, "pid": r["pid"] }));
+    Ok(Json(r))
+}
+
+#[derive(Deserialize)]
+struct TermBody {
+    #[serde(default)]
+    cols: Option<u16>,
+    #[serde(default)]
+    rows: Option<u16>,
+}
+
+/// Step 1: an authenticated request for a single-use, 30-second ticket.
+async fn terminal_ticket(State(e): State<AppState>, Auth(who): Auth, Json(b): Json<TermBody>) -> R<Json<Value>> {
+    person(&who)?;
+    // Fail now, not after the WebSocket opened, when there is no session.
+    e.session.call(json!({ "op": "info" })).await?;
+    let ticket = e.session.issue_ticket(&who.id, b.cols.unwrap_or(80), b.rows.unwrap_or(24))?;
+    let user = e.session.user().unwrap_or("the console user").to_string();
+    session_audit(&e, &who, "session.terminal", format!("Opened a terminal as {user}"), json!({}));
+    Ok(Json(json!({ "ticket": ticket, "expires_in_s": 30 })))
+}
+
+#[derive(Deserialize)]
+struct TicketQuery {
+    ticket: String,
+}
+
+/// Step 2: the WebSocket, authorized by the ticket alone.
+async fn terminal_socket(
+    State(e): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<TicketQuery>,
+    ws: axum::extract::ws::WebSocketUpgrade,
+) -> Response {
+    // Cross-site pages cannot get a ticket, and their Origin is refused as well.
+    let origin_ok = headers
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(|o| host_allowed(o.split_once("://").map(|(_, rest)| rest), &e.allowed_hosts))
+        .unwrap_or(true);
+    if !origin_ok {
+        return EngineError::forbidden("cross-origin terminal request").into_response();
+    }
+    let Some(ticket) = e.session.redeem(&q.ticket) else {
+        return EngineError::new(401, "unauthorized", "invalid or expired terminal ticket").into_response();
+    };
+    tracing::info!(target: "fluxd::session", "terminal opened by {}", ticket.principal);
+    match e.session.open_terminal(ticket.cols, ticket.rows).await {
+        Ok((unix, _)) => ws.on_upgrade(move |socket| crate::session::relay(socket, unix)),
+        Err(err) => err.into_response(),
+    }
 }

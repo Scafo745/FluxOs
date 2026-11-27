@@ -52,4 +52,8 @@ pub trait Target: Send + Sync {
     fn health(&self, spec: &SystemSpec, generation: u64, artifacts: &[ArtifactInfo]) -> Vec<HealthResult>;
     /// Activates a staged generation (simulated in the sandbox, `systemctl reboot` on NixOS).
     fn reboot(&self) -> Result<String>;
+    /// Turns the machine off. Only real targets can.
+    fn poweroff(&self) -> Result<String> {
+        anyhow::bail!("the {} target cannot power off", self.name())
+    }
 }

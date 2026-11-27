@@ -94,4 +94,11 @@ pub struct ServeArgs {
     /// always accepted; anything else is refused to stop DNS rebinding.
     #[arg(long, env = "FLUX_ALLOWED_HOSTS", value_delimiter = ',')]
     pub allowed_hosts: Vec<String>,
+    /// Account whose flux-session (terminal, files, apps) paired screens may
+    /// use, found at /run/user/<uid>/fluxos/session.sock.
+    #[arg(long, env = "FLUX_CONSOLE_USER")]
+    pub console_user: Option<String>,
+    /// Explicit flux-session socket (development); overrides --console-user.
+    #[arg(long, env = "FLUX_SESSION_SOCKET")]
+    pub session_socket: Option<PathBuf>,
 }

@@ -28,8 +28,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Build fluxd
-        run: cargo build -p fluxd
+      - name: Build fluxd and flux-session
+        run: cargo build -p fluxd -p flux-session
       - name: Agent
         working-directory: agent
         run: npm ci --no-audit --no-fund && npm run build

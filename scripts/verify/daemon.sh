@@ -120,6 +120,8 @@ R=$(post $A /v1/plans/$ID/approve "{\"plan_hash\":\"$HASH\"}")
 check "staged for the next boot" "$(echo "$R" | jq -r .status)" staged
 check "agent cannot reboot" "$(post $G /v1/system/reboot '{}' | jq -r .error.code)" forbidden
 check "simulated reboot activates it" "$(post $A /v1/system/reboot '{}' | jq -r .staged_activated)" true
+check "agent cannot shut down" "$(post $G /v1/system/poweroff '{}' | jq -r .error.code)" forbidden
+check "the sandbox has no machine to shut down" "$(post $A /v1/system/poweroff '{}' | jq -r .error.code)" not_supported
 
 section "Automatic rollback"
 CUR=$(get $G /v1/system | jq .generation)
@@ -229,7 +231,58 @@ check "going back to an earlier theme needs no rebuild" "$(echo "$R" | jq -r '[.
 P=$(npost $NG /v1/plans '{"operations":[{"tool":"packages.install","params":{"packages":["htop"]}}]}')
 R=$(npost $NA "/v1/plans/$(echo "$P" | jq -r .id)/approve" "{\"plan_hash\":\"$(echo "$P" | jq -r .plan_hash)\"}")
 check "a package install rebuilds" "$(echo "$R" | jq -r '[.result.steps[] | select(startswith("[dry-run] nixos-rebuild"))] | length')/$(grep -c 'pkgs.htop' "$NX/logs/dry-run-generated.nix")" "2/1"
+check "shutting down runs systemctl poweroff" "$(npost $NA /v1/system/poweroff '{}' | jq -r .message)" "[dry-run] systemctl poweroff"
+check "shutting down is audited" "$(curl -s -H "Authorization: Bearer $NA" "$N/v1/audit?kind=system.poweroff" | jq '.entries | length')" 1
 stop "$FLUXD_PID"
+
+section "User session relay (terminal, files, processes)"
+SESSION_BIN="${SESSION_BIN:-$ROOT/target/debug/flux-session}"
+if [ -x "$SESSION_BIN" ]; then
+  SX=$(mktemp -d "${TMPDIR:-/tmp}/fluxd-session.XXXXXX")
+  mkdir -p "$SX/state"
+  write_hardware "$SX/state"
+  "$SESSION_BIN" --socket "$SX/session.sock" 2>/dev/null &
+  PIDS+=("$!")
+  SPORT=17760
+  SU=http://127.0.0.1:$SPORT
+  start_fluxd "$SX/state" $SPORT --session-socket "$SX/session.sock"
+  SA=$(cat "$SX/state/secrets/admin.token")
+  SG=$(cat "$SX/state/secrets/agent.token")
+  sget() { curl -s -H "Authorization: Bearer $1" "$SU$2"; }
+  check "the session is reachable for the owner" "$(sget $SA /v1/session | jq -r .available)" true
+  check "the AI agent cannot use the user's session" "$(sget $SG /v1/session/files | jq -r .error.code)" forbidden
+  check "files are listed with the user's rights" "$(sget $SA "/v1/session/files?path=$ROOT/nix" | jq -r '[.entries[].name] | index("module.nix") != null')" true
+  check "text files are read" "$(sget $SA "/v1/session/file?path=$ROOT/LICENSE" | jq -r '.text | startswith("MIT License")')" true
+  check "processes come from /proc" "$(sget $SA /v1/session/processes | jq -r '.processes | length > 0')" true
+  check "pid 1 cannot be signalled" "$(curl -s -X POST -H "Authorization: Bearer $SA" -H 'content-type: application/json' $SU/v1/session/processes/1/signal -d '{"signal":"KILL"}' | jq -r .error.code)" bad_request
+  check "a terminal needs a ticket" "$(http_code "$SU/v1/session/terminal?ticket=flxt_forged" -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==')" 401
+  if command -v node >/dev/null 2>&1; then
+    TK=$(curl -s -X POST -H "Authorization: Bearer $SA" -H 'content-type: application/json' $SU/v1/session/terminal -d '{"cols":100,"rows":30}' | jq -r .ticket)
+    cat >"$SX/ws.mjs" <<'EOF'
+const url = process.argv[2];
+const run = () => new Promise((resolve) => {
+  const ws = new WebSocket(url);
+  ws.binaryType = "arraybuffer";
+  let out = "", exit = null, done = false;
+  const finish = (opened) => { if (!done) { done = true; resolve({ out, exit, opened }); } };
+  let opened = false;
+  ws.onopen = () => { opened = true; ws.send(JSON.stringify({ type: "resize", cols: 132, rows: 43 })); ws.send(new TextEncoder().encode("stty size; exit 7\n")); };
+  ws.onmessage = (m) => { if (typeof m.data === "string") { const v = JSON.parse(m.data); if (v.type === "exit") exit = v.code; } else out += new TextDecoder().decode(m.data); };
+  ws.onclose = () => finish(opened);
+  ws.onerror = () => finish(opened);
+  setTimeout(() => finish(opened), 8000);
+});
+const first = await run();
+const second = await run();
+console.log(`${first.out.includes("43 132")}/${first.exit}/${second.opened}`);
+EOF
+    check "the terminal runs a shell, resizes and reports its exit code; tickets are single use" "$(node "$SX/ws.mjs" "ws://127.0.0.1:$SPORT/v1/session/terminal?ticket=$TK")" "true/7/false"
+  fi
+  check "opening a terminal is audited" "$(sget $SA '/v1/audit?kind=session.terminal' | jq '.entries | length > 0')" true
+  stop "$FLUXD_PID"
+else
+  echo "  (skipped: build flux-session with cargo build -p flux-session)"
+fi
 
 section "Serving the web UI"
 WEB=$(mktemp -d "${TMPDIR:-/tmp}/fluxd-ui.XXXXXX")

@@ -16,6 +16,7 @@ mod events;
 mod health;
 mod hwprobe;
 mod mcp;
+mod session;
 mod signing;
 mod store;
 mod targets;

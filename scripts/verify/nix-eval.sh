@@ -95,5 +95,7 @@ check "appliance: fluxd adopts the image's spec" "$(opt '"environment"."etc"."fl
 check "appliance: /etc/fluxos is the live theme directory" "$(opt environment.etc.fluxos.source)" /run/fluxos/current/fluxos
 check "appliance: guest support for VirtualBox and VMware" "$(opt virtualisation.virtualbox.guest.enable)/$(opt virtualisation.vmware.guest.enable)" "true/true"
 check "appliance: the self-test only runs with its credential" "$(opt systemd.services.fluxos-selftest.unitConfig.ConditionCredential)" fluxos.selftest
+check_match "appliance: fluxd relays to flux's session" "$(opt systemd.services.fluxd.serviceConfig.ExecStart)" '--console-user flux( |$)'
+check "appliance: flux-session runs in flux's user manager only" "$(opt systemd.user.services.flux-session.unitConfig.ConditionUser)" flux
 
 summary

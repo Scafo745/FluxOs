@@ -20,8 +20,8 @@ case "$UI_MODE" in
   *) echo "FLUX_UI must be vite, dist or none (got '$UI_MODE')" >&2; exit 2 ;;
 esac
 
-echo "› building fluxd"
-cargo build -q -p fluxd
+echo "› building fluxd and flux-session"
+cargo build -q -p fluxd -p flux-session
 echo "› building flux-agent"
 (cd agent && { [ -d node_modules ] || npm install --no-audit --no-fund --silent; } && npm run -s build)
 if [ "$UI_MODE" != none ]; then
@@ -35,13 +35,19 @@ if [ "$UI_MODE" = dist ]; then
   UI_ARGS=(--ui-dir "$ROOT/ui/dist")
 fi
 
+# Your own session (terminal, files, apps in the UI), as you.
+mkdir -p "$STATE"
+./target/debug/flux-session --socket "$STATE/session.sock" &
+SESSION=$!
+
 # fluxd writes a fresh one-time pairing code on every start.
 rm -f "$STATE/secrets/pairing.code"
-./target/debug/fluxd serve --state-dir "$STATE" --listen 127.0.0.1:7700 --dev ${UI_ARGS[@]+"${UI_ARGS[@]}"} &
+./target/debug/fluxd serve --state-dir "$STATE" --listen 127.0.0.1:7700 --dev \
+  --session-socket "$STATE/session.sock" ${UI_ARGS[@]+"${UI_ARGS[@]}"} &
 FLUXD=$!
 AGENT=""
 VITE=""
-trap 'kill $FLUXD $AGENT $VITE 2>/dev/null || true' EXIT INT TERM
+trap 'kill $FLUXD $SESSION $AGENT $VITE 2>/dev/null || true' EXIT INT TERM
 
 for _ in $(seq 1 100); do [ -f "$STATE/secrets/intent.token" ] && [ -f "$STATE/secrets/pairing.code" ] && break; sleep 0.1; done
 

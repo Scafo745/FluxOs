@@ -416,4 +416,15 @@ impl Target for NixosTarget {
         }
         Ok("rebooting".into())
     }
+
+    fn poweroff(&self) -> Result<String> {
+        if self.dry_run {
+            return Ok("[dry-run] systemctl poweroff".into());
+        }
+        let (ok, s) = Self::systemctl(&["poweroff"]);
+        if !ok {
+            bail!("systemctl poweroff failed: {s}");
+        }
+        Ok("powering off".into())
+    }
 }

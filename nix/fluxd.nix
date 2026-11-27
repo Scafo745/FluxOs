@@ -15,7 +15,8 @@ rustPlatform.buildRustPackage {
   };
 
   cargoLock.lockFile = ../Cargo.lock;
-  cargoBuildFlags = [ "-p" "fluxd" ];
+  # flux-session runs as the console user and serves the UI's terminal, files and apps.
+  cargoBuildFlags = [ "-p" "fluxd" "-p" "flux-session" ];
   doCheck = false;
 
   meta = {

@@ -379,6 +379,7 @@ pub fn boot(args: &ServeArgs) -> Result<Arc<Engine>> {
             .map(|h| h.trim().to_ascii_lowercase())
             .filter(|h| !h.is_empty())
             .collect(),
+        session: crate::session::SessionLink::new(args.console_user.clone(), args.session_socket.clone()),
     });
     for d in degraded {
         engine.set_degraded(d);

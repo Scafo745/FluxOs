@@ -251,6 +251,7 @@ in
           + " --agent-url http://127.0.0.1:${toString cfg.agent.port}"
           + optionalString cfg.ui.enable " --ui-dir ${cfg.ui.package}"
           + optionalString (cfg.allowedHosts != [ ]) " --allowed-hosts ${concatStringsSep "," cfg.allowedHosts}"
+          + optionalString (consoleUser != null) " --console-user ${consoleUser}"
           + optionalString (cfg.flake != null) " --nixos-flake ${cfg.flake}"
           + optionalString cfg.dryRun " --nixos-dry-run"
           + optionalString cfg.dev " --dev";
@@ -334,6 +335,20 @@ in
 
     warnings = lib.optional (cfg.target == "nixos" && cfg.dryRun) "services.fluxos: dryRun is on, generations will not be activated.";
   }
+
+  (mkIf (consoleUser != null && cfg.ui.enable) {
+    # The UI's terminal, files, processes and app launcher, as the console user.
+    systemd.user.services.flux-session = {
+      description = "FluxOS session service for the web UI";
+      wantedBy = [ "default.target" ];
+      unitConfig.ConditionUser = consoleUser;
+      serviceConfig = {
+        ExecStart = "${cfg.package}/bin/flux-session";
+        Restart = "on-failure";
+        RestartSec = 2;
+      };
+    };
+  })
 
   (mkIf (cfg.shell.enable && consoleUser != null) {
     services.cage = {
