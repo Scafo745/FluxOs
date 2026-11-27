@@ -1,9 +1,10 @@
 import { Maximize2, Minimize2, Minus, X } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, useMemo, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, Suspense, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { APPS, TINT_BG } from "../apps/meta";
 import { APP_COMPONENTS } from "../apps/registry";
+import { Spinner } from "../components/ui";
 import type { Spec } from "../lib/types";
 import { type Rect, type Win, useShell } from "../state/shell";
 import { layoutWindows, snapRect, snapTarget } from "./layout";
@@ -120,7 +121,15 @@ function WindowFrame({ win, rect, focused, spec }: { win: Win; rect: Rect; focus
         <WinButton label="Close" icon={X} onClick={() => useShell.getState().close(win.id)} danger />
       </header>
       <div className="relative min-h-0 flex-1 overflow-auto select-text">
-        <Body win={win} />
+        <Suspense
+          fallback={
+            <p className="flex items-center gap-2 p-5 text-sm text-muted">
+              <Spinner /> Loading {win.title}…
+            </p>
+          }
+        >
+          <Body win={win} />
+        </Suspense>
       </div>
       {floating && (
         <div

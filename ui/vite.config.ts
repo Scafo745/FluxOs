@@ -15,7 +15,8 @@ export default defineConfig({
     port: Number(process.env.FLUX_UI_PORT ?? 5173),
     strictPort: true,
     proxy: {
-      "/v1": { target: fluxd, changeOrigin: true },
+      // ws: the terminal's WebSocket goes through fluxd too.
+      "/v1": { target: fluxd, changeOrigin: true, ws: true },
       "/agent": { target: agent, changeOrigin: true, rewrite: (path) => path.replace(/^\/agent/, "") },
     },
   },

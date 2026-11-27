@@ -42,7 +42,8 @@ export interface Toast {
 export interface Confirm {
   title: string;
   body?: string;
-  tier: Tier;
+  /** Risk of a system change; omitted for plain confirmations. */
+  tier?: Tier;
   changes: Change[];
   confirmLabel: string;
   onConfirm: () => Promise<void> | void;

@@ -1,8 +1,8 @@
-import { Bell, ChevronDown, CloudOff, Eye, SlidersHorizontal } from "lucide-react";
+import { Bell, ChevronDown, CloudOff, Eye, Search, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { FluxMark } from "../components/FluxMark";
-import { Spinner, StatusDot } from "../components/ui";
+import { Kbd, Spinner, StatusDot } from "../components/ui";
 import { clockTime } from "../lib/format";
 import type { Spec } from "../lib/types";
 import { useShell } from "../state/shell";
@@ -124,6 +124,35 @@ function Clock() {
   );
 }
 
+/** The prompt bar of the MorphOS prototype's menu bar. */
+function SynthPill() {
+  return (
+    <button
+      type="button"
+      onClick={() => useShell.getState().show("assistant")}
+      className="mx-1 hidden h-[calc(100%-8px)] max-w-80 min-w-0 items-center gap-2 rounded-full border hairline bg-fg/[0.05] px-3 text-xs text-muted transition-colors hover:border-accent/50 hover:text-fg xl:flex"
+    >
+      <Search className="size-3.5 shrink-0" />
+      <span className="truncate">Synthesize your OS with a prompt…</span>
+      <Kbd>Ctrl K</Kbd>
+    </button>
+  );
+}
+
+/** Security posture at a glance; opens the Security app. */
+function SecurityChip({ spec }: { spec: Spec }) {
+  const s = spec.security;
+  const open = s.firewall.allowed_tcp_ports.length + s.firewall.allowed_udp_ports.length;
+  const label = spec.session.mode === "exam" ? "Exam" : s.usb_storage === "block" && open === 0 ? "Locked down" : "Protected";
+  return (
+    <PanelButton label={`Security: ${label}`} onClick={() => useShell.getState().open("security")}>
+      <span className="flex items-center gap-1 rounded-full border border-ok/40 bg-ok/10 px-2 py-0.5 text-[10px] font-semibold tracking-wider text-ok uppercase">
+        <ShieldCheck className="size-3" /> {label}
+      </span>
+    </PanelButton>
+  );
+}
+
 function AiStatus() {
   const agent = useSystem((s) => s.agent);
   let tone: "ok" | "accent" | "bad" | "muted" = "muted";
@@ -173,6 +202,7 @@ export function Panel({ spec }: { spec: Spec }) {
           {h >= 26 && <span className="font-display font-bold tracking-tight">FluxOS</span>}
         </PanelButton>
         {d.panel.global_menu && <GlobalMenu />}
+        {top && h >= 26 && !centered && <SynthPill />}
         {dockless && !centered && <Taskbar spec={spec} height={h} />}
         {!centered && !d.panel.global_menu && <div className="px-1"><Workspaces count={d.workspaces} numbers={numbers} /></div>}
       </div>
@@ -206,6 +236,7 @@ export function Panel({ spec }: { spec: Spec }) {
             <CloudOff className="size-3.5" /> Offline
           </span>
         )}
+        {h >= 26 && <SecurityChip spec={spec} />}
         <AiStatus />
         <PanelButton label={pending ? `${pending} change(s) waiting for approval` : "Approvals"} onClick={() => shell.open("approvals")}>
           <span className="relative">

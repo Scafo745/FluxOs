@@ -157,15 +157,19 @@ export function ConfirmDialog() {
           <div className="min-w-0 flex-1">
             <h2 className="text-lg font-semibold">{confirm.title}</h2>
             {confirm.body && <p className="mt-1 text-sm text-muted">{confirm.body}</p>}
-            <div className="mt-3 flex items-center gap-2">
-              <TierBadge tier={confirm.tier} />
-              <span className="text-xs text-muted">{TIER_BEHAVIOR[confirm.tier]}</span>
-            </div>
+            {confirm.tier !== undefined && (
+              <div className="mt-3 flex items-center gap-2">
+                <TierBadge tier={confirm.tier} />
+                <span className="text-xs text-muted">{TIER_BEHAVIOR[confirm.tier]}</span>
+              </div>
+            )}
           </div>
         </div>
-        <div className="mt-4 max-h-[40vh] overflow-y-auto rounded-lg border hairline bg-bg/40 px-3 py-1">
-          <ChangeList changes={confirm.changes} />
-        </div>
+        {confirm.changes.length > 0 && (
+          <div className="mt-4 max-h-[40vh] overflow-y-auto rounded-lg border hairline bg-bg/40 px-3 py-1">
+            <ChangeList changes={confirm.changes} />
+          </div>
+        )}
         {error && <p className="mt-3 text-sm text-bad">{error}</p>}
         <div className="mt-5 flex justify-end gap-2">
           <Button variant="ghost" onClick={close}>

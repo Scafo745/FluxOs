@@ -6,6 +6,7 @@ import { FluxMark } from "../components/FluxMark";
 import { useShell } from "../state/shell";
 import { selectSpec, useSystem } from "../state/system";
 import { ControlCenter } from "./ControlCenter";
+import { DesktopIcons } from "./DesktopIcons";
 import { Dock } from "./Dock";
 import { Launcher } from "./Launcher";
 import { useBackendLink, useShortcuts } from "./link";
@@ -62,6 +63,7 @@ export function Desktop() {
   return (
     <div className="fixed inset-0 overflow-hidden">
       <Wallpaper />
+      {!spec.desktop.windows.tiling && <DesktopIcons />}
       <WindowLayer spec={spec} />
       <SnapPreview />
       <Panel spec={spec} />

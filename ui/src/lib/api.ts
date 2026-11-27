@@ -27,6 +27,11 @@ import type {
   UiConfig,
   VerifyReport,
   WhoAmI,
+  DesktopApp,
+  DirListing,
+  FileContent,
+  ProcessList,
+  UserSession,
 } from "./types";
 
 export class ApiError extends Error {
@@ -126,6 +131,7 @@ export const api = {
       body: { ...(to === undefined ? {} : { to }), ...(prompt ? { prompt } : {}), ...(sessionId ? { session_id: sessionId } : {}) },
     }),
   reboot: () => json<{ generation: number; message: string; staged_activated: boolean }>("/v1/system/reboot", { body: {} }),
+  poweroff: () => json<{ generation: number; message: string }>("/v1/system/poweroff", { body: {} }),
   profiles: () => json<{ profiles: ProfileSummary[] }>("/v1/profiles").then((r) => r.profiles),
   profile: (id: string) => json<ProfileDetail>(`/v1/profiles/${enc(id)}`),
   saveProfile: (id: string, name: string, summary?: string) =>
@@ -142,7 +148,25 @@ export const api = {
   auditVerify: () => json<VerifyReport>("/v1/audit/verify"),
   sessions: () => json<{ current: string | null; sessions: SessionInfo[] }>("/v1/sessions"),
   revokeSession: (id: string) => json<{ revoked: SessionInfo }>(`/v1/sessions/${enc(id)}/revoke`, { body: {} }),
+
+  // The console user's session (flux-session, relayed by fluxd): the user's own rights, never fluxd's.
+  userSession: () => json<UserSession>("/v1/session"),
+  files: (path: string) => json<DirListing>(`/v1/session/files?path=${enc(path)}`),
+  file: (path: string) => json<FileContent>(`/v1/session/file?path=${enc(path)}`),
+  processes: () => json<ProcessList>("/v1/session/processes"),
+  signal: (pid: number, signal: "TERM" | "KILL" | "STOP" | "CONT") =>
+    json<{ message: string }>(`/v1/session/processes/${pid}/signal`, { body: { signal } }),
+  desktopApps: () => json<{ apps: DesktopApp[] }>("/v1/session/apps").then((r) => r.apps),
+  launch: (id: string) => json<{ pid: number }>(`/v1/session/apps/${enc(id)}/launch`, { body: {} }),
+  terminalTicket: (cols: number, rows: number) => json<{ ticket: string }>("/v1/session/terminal", { body: { cols, rows } }),
 };
+
+/** WebSocket URL of a terminal, authorized by a single-use ticket. */
+export function terminalSocketUrl(ticket: string): string {
+  const u = new URL(fluxdUrl(`/v1/session/terminal?ticket=${enc(ticket)}`), window.location.href);
+  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+  return u.toString();
+}
 
 export interface PlanBody {
   intent: { prompt?: string; source?: string; session_id?: string };

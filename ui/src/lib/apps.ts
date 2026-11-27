@@ -71,6 +71,22 @@ export function installedApps(spec: Spec, catalog: Catalog | null): InstalledApp
   return out;
 }
 
+/** Our category for an XDG desktop entry's Categories list. */
+export function xdgCategory(categories: string[]): string {
+  const has = (c: string) => categories.includes(c);
+  if (has("Game")) return "gaming";
+  if (has("WebBrowser") || has("Network") && !has("InstantMessaging")) return "web";
+  if (has("InstantMessaging") || has("Chat")) return "social";
+  if (has("Development") || has("IDE")) return "dev";
+  if (has("Office")) return "office";
+  if (has("Graphics")) return "creative";
+  if (has("AudioVideo") || has("Audio") || has("Video")) return "media";
+  if (has("Education") || has("Science")) return "education";
+  if (has("Security")) return "security";
+  if (has("System") || has("Settings") || has("Monitor")) return "system";
+  return "desktop";
+}
+
 export function hueGradient(hue: number): string {
   return `linear-gradient(145deg, hsl(${hue} 72% 60%), hsl(${(hue + 28) % 360} 70% 42%))`;
 }
