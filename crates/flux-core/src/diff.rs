@@ -184,7 +184,14 @@ fn summarize(segments: &[String], before: &Value, after: &Value) -> String {
         "session.ephemeral_home" => format!("Clean state on every boot (ephemeral home): {}", arrow()),
         "drivers.gpu" => format!("GPU driver: {}", arrow()),
         "drivers.gaming_controllers" => format!("Gaming controller support: {}", arrow()),
-        "desktop.environment" => format!("Desktop environment: {}", arrow()),
+        "desktop.environment" => {
+            let name = |v: &Value| {
+                serde_json::from_value::<crate::spec::DesktopEnv>(v.clone())
+                    .map(|e| e.label().to_string())
+                    .unwrap_or(short(v))
+            };
+            format!("Desktop environment: {} → {}", name(before), name(after))
+        }
         "desktop.style" => format!("Style preset: {}", arrow()),
         "design.theme_name" => format!("Theme: {}", arrow()),
         "design.tokens.scheme" => format!("Color scheme: {}", arrow()),

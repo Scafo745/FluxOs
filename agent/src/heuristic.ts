@@ -250,6 +250,11 @@ export function heuristic(prompt: string, ctx: Context, answers: Record<string, 
     const e = env[2] === "kde" ? "plasma" : env[2]!;
     b.op("desktop.set_environment", { environment: e }, `switch to ${e}`);
     b.rule("env", `${e} desktop`);
+  } else if (
+    b.hit(/\b(use|switch to|change to|move to|go back to|back to|i want|give me)\s+(the\s+)?(fluxos|flux)\s+(shell|desktop)\b|\b(web|browser)[- ]based desktop\b/)
+  ) {
+    b.op("desktop.set_environment", { environment: "fluxos" }, "the FluxOS shell, the web desktop that follows the system spec");
+    b.rule("env", "FluxOS shell");
   }
 
   // ---- colors and scheme

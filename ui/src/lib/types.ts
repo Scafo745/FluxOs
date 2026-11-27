@@ -18,7 +18,7 @@ export type PlanStatus =
   | "no_op";
 export type GenStatus = "pending" | "active" | "superseded" | "staged" | "failed" | "rolled-back";
 export type StylePreset = "glass-dock" | "snap-layouts" | "tiling" | "classic-panel" | "ops-center" | "focus" | "custom";
-export type DesktopEnv = "plasma" | "gnome" | "hyprland" | "cosmic";
+export type DesktopEnv = "fluxos" | "plasma" | "gnome" | "hyprland" | "cosmic";
 
 export interface BootStage {
   id: string;

@@ -66,12 +66,18 @@ impl Booter<'_> {
     }
 }
 
+/// Spec of a NixOS image built by FluxOS (`services.fluxos.initialSpec`).
+/// `/etc/fluxos/spec.json` is where images built before live files kept it.
+const IMAGE_SPECS: [&str; 2] = ["/etc/fluxos-image/spec.json", "/etc/fluxos/spec.json"];
+
 fn adopt_spec(target: TargetKind) -> (SystemSpec, String) {
     // A NixOS image built by FluxOS ships its spec; adopt it instead of rebuilding on first boot.
-    if target == TargetKind::Nixos
-        && let Ok(spec) = read_json::<SystemSpec>(Path::new("/etc/fluxos/spec.json"))
-    {
-        return (spec, "adopted /etc/fluxos/spec.json from the installed image".into());
+    if target == TargetKind::Nixos {
+        for path in IMAGE_SPECS {
+            if let Ok(spec) = read_json::<SystemSpec>(Path::new(path)) {
+                return (spec, format!("adopted {path} from the installed image"));
+            }
+        }
     }
     (SystemSpec::default(), "bootstrapped from the default profile".into())
 }
@@ -309,6 +315,13 @@ pub fn boot(args: &ServeArgs) -> Result<Arc<Engine>> {
         })?;
         Ok((1, format!("generation 1 {how}"), false))
     })?;
+
+    if args.target == TargetKind::Nixos {
+        b.stage("live", "Live theme files", || {
+            let note = target.on_boot(current, &store.rendered_dir(current))?;
+            Ok(((), note.unwrap_or_else(|| "nothing to publish".into()), false))
+        })?;
+    }
 
     let mut degraded: Vec<String> = Vec::new();
     if !audit_ok {

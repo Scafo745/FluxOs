@@ -205,6 +205,32 @@ check "operator-disabled tool refused" "$(fpost $FA /v1/plans/validate '{"operat
 check "fleet mode pairs screens as a local user, not an admin" \
   "$(curl -s -X POST -H 'content-type: application/json' "http://127.0.0.1:$FPORT/v1/pair" -d "{\"code\":\"$(cat "$FLEET/secrets/pairing.code")\"}" | jq -r .principal.role)" user
 
+section "NixOS target: live theme files (dry run)"
+NX=$(mktemp -d "${TMPDIR:-/tmp}/fluxd-nixos.XXXXXX")
+write_hardware "$NX"
+NPORT=17750
+N=http://127.0.0.1:$NPORT
+start_fluxd "$NX" $NPORT --target nixos --nixos-dry-run
+NG=$(cat "$NX/secrets/agent.token")
+NA=$(cat "$NX/secrets/admin.token")
+npost() { curl -s -X POST -H "Authorization: Bearer $1" -H 'content-type: application/json' "$N$2" -d "$3"; }
+LIVE="$NX/logs/live/current"
+check "boot publishes generation 1's live files" "$(cat "$LIVE/fluxos/generation" 2>/dev/null)" 1
+check "the default desktop is the FluxOS shell" "$(curl -s -H "Authorization: Bearer $NA" $N/v1/system | jq -r .spec.desktop.environment)" fluxos
+R=$(npost $NG '/v1/plans?auto_apply=true' '{"operations":[{"tool":"design.generate_palette","params":{"accent":"#39ff14","theme_name":"Neon Green"}}]}')
+check "first apply writes generated.nix and rebuilds" "$(echo "$R" | jq -r '[.result.steps[] | select(startswith("[dry-run] nixos-rebuild"))] | length')" 2
+R=$(npost $NG '/v1/plans?auto_apply=true' '{"operations":[{"tool":"design.generate_palette","params":{"accent":"#ff2e97","theme_name":"Neon Pink"}}]}')
+check "a palette change needs no rebuild" "$(echo "$R" | jq -r '.result.message')" "Generation 3 is live (no rebuild needed)"
+check "live files switched to the new generation" "$(cat "$LIVE/fluxos/generation")/$(grep -c 'Neon Pink' "$LIVE/fluxos/theme.css")" "3/1"
+check "live files pass the health check" "$(echo "$R" | jq -r '.result.health[] | select(.id=="live.files") | .status')" pass
+check "the module on disk keeps the last rebuilt configuration" "$(grep -c 'fluxos-gen-2' "$NX/logs/dry-run-generated.nix")" 1
+R=$(npost $NA /v1/rollback '{"to":2}')
+check "going back to an earlier theme needs no rebuild" "$(echo "$R" | jq -r '[.result.steps[] | select(startswith("[dry-run] nixos-rebuild"))] | length')/$(cat "$LIVE/fluxos/generation")" "0/4"
+P=$(npost $NG /v1/plans '{"operations":[{"tool":"packages.install","params":{"packages":["htop"]}}]}')
+R=$(npost $NA "/v1/plans/$(echo "$P" | jq -r .id)/approve" "{\"plan_hash\":\"$(echo "$P" | jq -r .plan_hash)\"}")
+check "a package install rebuilds" "$(echo "$R" | jq -r '[.result.steps[] | select(startswith("[dry-run] nixos-rebuild"))] | length')/$(grep -c 'pkgs.htop' "$NX/logs/dry-run-generated.nix")" "2/1"
+stop "$FLUXD_PID"
+
 section "Serving the web UI"
 WEB=$(mktemp -d "${TMPDIR:-/tmp}/fluxd-ui.XXXXXX")
 mkdir -p "$WEB/ui" "$WEB/state"

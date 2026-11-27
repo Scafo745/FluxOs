@@ -43,6 +43,11 @@ pub trait Target: Send + Sync {
     fn apply(&self, req: &ApplyRequest<'_>) -> Result<ApplyOutcome>;
     /// Returns the system to a stored generation.
     fn restore(&self, generation: u64, rendered_dir: &Path, requires_reboot: bool) -> Result<Vec<String>>;
+    /// Runs once the current generation is known at boot (the NixOS target
+    /// republishes its live files, which live on a tmpfs).
+    fn on_boot(&self, _generation: u64, _rendered_dir: &Path) -> Result<Option<String>> {
+        Ok(None)
+    }
     /// System health after an apply.
     fn health(&self, spec: &SystemSpec, generation: u64, artifacts: &[ArtifactInfo]) -> Vec<HealthResult>;
     /// Activates a staged generation (simulated in the sandbox, `systemctl reboot` on NixOS).

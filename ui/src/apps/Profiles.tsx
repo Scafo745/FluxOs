@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Button, Chip, Empty } from "../components/ui";
 import { api } from "../lib/api";
-import { titleCase } from "../lib/format";
+import { desktopLabel, titleCase } from "../lib/format";
 import type { ProfileDetail, ProfileSummary, Spec } from "../lib/types";
 import { errorText, reportPlan } from "../state/actions";
 import { useShell } from "../state/shell";
@@ -123,7 +123,7 @@ function ProfileCard({ p }: { p: ProfileSummary }) {
           {p.source !== "builtin" && <Chip>{p.source === "user" ? "Saved" : "Imported"}</Chip>}
         </div>
         <p className="mt-0.5 text-xs text-muted">
-          {p.theme_name} · {titleCase(p.desktop)} · {titleCase(p.style)} · {p.kernel} kernel
+          {p.theme_name} · {desktopLabel(p.desktop)} · {titleCase(p.style)} · {p.kernel} kernel
         </p>
         <p className="mt-2 line-clamp-3 text-sm text-fg/85">{p.summary}</p>
         {p.compliance_review_required && (

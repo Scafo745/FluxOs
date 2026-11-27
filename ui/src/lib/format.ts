@@ -53,6 +53,18 @@ export function titleCase(s: string): string {
   return s.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+export const DESKTOP_LABEL: Record<string, string> = {
+  fluxos: "FluxOS shell",
+  plasma: "KDE Plasma",
+  gnome: "GNOME",
+  hyprland: "Hyprland",
+  cosmic: "COSMIC",
+};
+
+export function desktopLabel(env: string): string {
+  return DESKTOP_LABEL[env] ?? titleCase(env);
+}
+
 export function isHexColor(v: unknown): v is string {
   return typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v);
 }
