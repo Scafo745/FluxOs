@@ -127,7 +127,15 @@ export function Terminal() {
       <Empty icon={SquareTerminal} title="No terminal">
         {state.message}
         <div className="mt-3">
-          <Button size="sm" icon={RotateCcw} onClick={() => setRun((n) => n + 1)}>
+          <Button
+            size="sm"
+            icon={RotateCcw}
+            onClick={() => {
+              // Render the terminal's element again before the effect looks for it.
+              setState({ phase: "connecting" });
+              setRun((n) => n + 1);
+            }}
+          >
             Try again
           </Button>
         </div>

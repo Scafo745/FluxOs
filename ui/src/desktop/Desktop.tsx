@@ -5,6 +5,7 @@ import { RestartOverlay } from "../boot/RestartOverlay";
 import { FluxMark } from "../components/FluxMark";
 import { useShell } from "../state/shell";
 import { selectSpec, useSystem } from "../state/system";
+import { useUser } from "../state/user";
 import { ControlCenter } from "./ControlCenter";
 import { DesktopIcons } from "./DesktopIcons";
 import { Dock } from "./Dock";
@@ -51,6 +52,11 @@ export function Desktop() {
   useEffect(() => {
     if (spec) useShell.getState().setArea(workArea(spec, vp.w, vp.h));
   }, [spec, vp.w, vp.h]);
+
+  // The user's desktop apps, so dock icons can start them.
+  useEffect(() => {
+    if (ready) void useUser.getState().refresh();
+  }, [ready]);
 
   useEffect(() => {
     if (!ready || !sessionStorage.getItem("fluxos.welcome")) return;

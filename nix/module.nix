@@ -344,7 +344,8 @@ in
       unitConfig.ConditionUser = consoleUser;
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/flux-session";
-        Restart = "on-failure";
+        # Also after a plain SIGTERM, for example from the Tasks app or pkill.
+        Restart = "always";
         RestartSec = 2;
       };
     };

@@ -4,10 +4,11 @@ import { type CSSProperties, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { APPS, DOCK_APPS, TINT_BG } from "../apps/meta";
-import { category, hueGradient, installedApps } from "../lib/apps";
+import { category, desktopEntryFor, hueGradient, installedApps } from "../lib/apps";
 import type { Spec } from "../lib/types";
 import { useShell } from "../state/shell";
 import { selectPending, useSystem } from "../state/system";
+import { useUser } from "../state/user";
 import { DOCK_PAD } from "./layout";
 
 export interface DockItem {
@@ -26,6 +27,7 @@ export function useDockItems(spec: Spec, maxInstalled = 8): DockItem[] {
   const { wins, focused, overlay } = useShell(useShallow((s) => ({ wins: s.wins, focused: s.focused, overlay: s.overlay })));
   const pending = useSystem((s) => selectPending(s).length);
   const catalog = useSystem((s) => s.catalog);
+  const entries = useUser((s) => s.apps);
   return useMemo(() => {
     const shell = useShell.getState();
     const items: DockItem[] = [
@@ -58,13 +60,15 @@ export function useDockItems(spec: Spec, maxInstalled = 8): DockItem[] {
     const apps = installedApps(spec, catalog).filter((a) => a.gui).slice(0, maxInstalled);
     apps.forEach((a, i) => {
       const cat = category(a.category);
+      // Started in the user's session when flux-session lists its desktop entry.
+      const entry = desktopEntryFor(a, entries);
       items.push({
         key: `app:${a.id}`,
         label: a.name,
         icon: cat.icon,
         background: hueGradient(cat.hue),
         separatorBefore: i === 0,
-        onClick: () => useShell.setState({ overlay: "launcher" }),
+        onClick: () => (entry ? void useUser.getState().launch(entry) : useShell.setState({ overlay: "launcher" })),
       });
     });
     items.push({
@@ -77,7 +81,7 @@ export function useDockItems(spec: Spec, maxInstalled = 8): DockItem[] {
       running: overlay === "launcher",
     });
     return items;
-  }, [wins, focused, overlay, pending, catalog, spec, maxInstalled]);
+  }, [wins, focused, overlay, pending, catalog, entries, spec, maxInstalled]);
 }
 
 export function DockIcon({
