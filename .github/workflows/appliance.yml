@@ -1,0 +1,116 @@
+# Builds the FluxOS VM image (an OVA for VirtualBox and VMware), boots it in
+# QEMU/KVM, runs the in-image self-test and keeps the image, screenshots and
+# serial log as artifacts. Run it by hand with "publish" to attach the image
+# to a GitHub pre-release.
+name: Appliance image
+
+on:
+  push:
+    branches: [main, feature/appliance]
+    paths:
+      - crates/**
+      - agent/**
+      - ui/**
+      - nix/**
+      - profiles/**
+      - scripts/ci/**
+      - flake.nix
+      - flake.lock
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/appliance.yml
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Attach the OVA to a GitHub pre-release
+        type: boolean
+        default: false
+      tag:
+        description: Release tag
+        type: string
+        default: appliance-preview
+
+permissions:
+  contents: write
+
+concurrency:
+  group: appliance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/local/.ghcup
+          sudo docker image prune --all --force >/dev/null || true
+          df -h /
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            system-features = nixos-test benchmark big-parallel kvm
+            max-jobs = auto
+
+      - name: Evaluate
+        run: |
+          nix eval --raw .#nixosConfigurations.fluxos-appliance.config.system.build.toplevel.drvPath
+          echo
+          nix eval --json .#nixosConfigurations.fluxos-appliance.config.warnings
+
+      - name: Build the OVA
+        run: nix build -L .#appliance-ova --out-link result-ova && ls -lh result-ova/
+
+      - name: Boot test (QEMU, self-test)
+        run: |
+          nix shell --inputs-from . nixpkgs#qemu_kvm nixpkgs#socat nixpkgs#gnutar --command \
+            scripts/ci/boot-test.sh result-ova boot-test
+
+      - name: Keep the screenshots and serial log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: boot-test
+          path: boot-test/
+          if-no-files-found: warn
+
+      - name: Stage the image
+        run: |
+          mkdir -p dist
+          cp -L result-ova/*.ova dist/FluxOS.ova
+          (cd dist && sha256sum FluxOS.ova > FluxOS.ova.sha256)
+          ls -lh dist
+
+      - name: Keep the image
+        uses: actions/upload-artifact@v6
+        with:
+          name: FluxOS-ova
+          path: dist/
+          compression-level: 0
+          retention-days: 30
+
+      - name: Publish a pre-release
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          notes="FluxOS appliance built from ${GITHUB_SHA::7}. Import FluxOS.ova into VirtualBox (File > Import Appliance) or VMware (File > Open). Log in as flux / flux. See the README for details."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/FluxOS.ova dist/FluxOS.ova.sha256 boot-test/desktop.png --clobber
+            gh release edit "$TAG" --notes "$notes" --target "$GITHUB_SHA"
+          else
+            gh release create "$TAG" dist/FluxOS.ova dist/FluxOS.ova.sha256 boot-test/desktop.png \
+              --prerelease --title "FluxOS appliance (preview)" --notes "$notes" --target "$GITHUB_SHA"
+          fi
